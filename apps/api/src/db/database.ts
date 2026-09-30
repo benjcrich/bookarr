@@ -86,20 +86,46 @@ function migrate(db: Database.Database): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS metadata_cache (
+      cache_key TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Additive migrations for DBs created before download-client columns existed
-  const cols = new Set(
+  const jobCols = new Set(
     (db.prepare("PRAGMA table_info(download_jobs)").all() as Array<{ name: string }>).map((c) => c.name)
   );
-  const add = (name: string, ddl: string) => {
-    if (!cols.has(name)) db.exec(`ALTER TABLE download_jobs ADD COLUMN ${ddl}`);
+  const addJob = (name: string, ddl: string) => {
+    if (!jobCols.has(name)) db.exec(`ALTER TABLE download_jobs ADD COLUMN ${ddl}`);
   };
-  add("client", "client TEXT");
-  add("external_id", "external_id TEXT");
-  add("progress", "progress REAL NOT NULL DEFAULT 0");
-  add("output_path", "output_path TEXT");
-  add("import_path", "import_path TEXT");
+  addJob("client", "client TEXT");
+  addJob("external_id", "external_id TEXT");
+  addJob("progress", "progress REAL NOT NULL DEFAULT 0");
+  addJob("output_path", "output_path TEXT");
+  addJob("import_path", "import_path TEXT");
+
+  const bookCols = new Set(
+    (db.prepare("PRAGMA table_info(audiobooks)").all() as Array<{ name: string }>).map((c) => c.name)
+  );
+  const addBook = (name: string, ddl: string) => {
+    if (!bookCols.has(name)) db.exec(`ALTER TABLE audiobooks ADD COLUMN ${ddl}`);
+  };
+  addBook("isbn", "isbn TEXT");
+  addBook("cover_url", "cover_url TEXT");
+  addBook("runtime_minutes", "runtime_minutes INTEGER");
+
+  const reqCols = new Set(
+    (db.prepare("PRAGMA table_info(requests)").all() as Array<{ name: string }>).map((c) => c.name)
+  );
+  const addReq = (name: string, ddl: string) => {
+    if (!reqCols.has(name)) db.exec(`ALTER TABLE requests ADD COLUMN ${ddl}`);
+  };
+  addReq("isbn", "isbn TEXT");
+  addReq("cover_url", "cover_url TEXT");
 }
 
 function seedIfEmpty(db: Database.Database): void {
@@ -177,6 +203,9 @@ function seedIfEmpty(db: Database.Database): void {
     sabnzbdUrl: process.env.SABNZBD_URL || "",
     sabnzbdApiKey: process.env.SABNZBD_API_KEY || "",
     sabnzbdCategory: process.env.SABNZBD_CATEGORY || "bookarr",
+    metadataMode: process.env.METADATA_MODE || "auto",
+    hardcoverApiKey: process.env.HARDCOVER_API_KEY || "",
+    metadataCacheTtlHours: process.env.METADATA_CACHE_TTL_HOURS || "24",
   };
   const set = db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`);
   for (const [k, v] of Object.entries(defaults)) set.run(k, v);

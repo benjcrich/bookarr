@@ -6,6 +6,7 @@ export function AdminSettings() {
     prowlarrApiKey?: string;
     qbittorrentPassword?: string;
     sabnzbdApiKey?: string;
+    hardcoverApiKey?: string;
   }>({});
   const [indexers, setIndexers] = useState<Array<{ id: number; name: string; protocol: string; enable: boolean }>>(
     []
@@ -22,6 +23,7 @@ export function AdminSettings() {
           prowlarrApiKey: "",
           qbittorrentPassword: "",
           sabnzbdApiKey: "",
+          hardcoverApiKey: "",
         });
         setIndexers(idx);
         setClientsLabel(
@@ -49,16 +51,20 @@ export function AdminSettings() {
         qbittorrentCategory: form.qbittorrentCategory,
         sabnzbdUrl: form.sabnzbdUrl,
         sabnzbdCategory: form.sabnzbdCategory,
+        metadataMode: form.metadataMode,
+        metadataCacheTtlHours: form.metadataCacheTtlHours,
       };
       if (form.prowlarrApiKey?.trim()) body.prowlarrApiKey = form.prowlarrApiKey.trim();
       if (form.qbittorrentPassword?.trim()) body.qbittorrentPassword = form.qbittorrentPassword.trim();
       if (form.sabnzbdApiKey?.trim()) body.sabnzbdApiKey = form.sabnzbdApiKey.trim();
+      if (form.hardcoverApiKey?.trim()) body.hardcoverApiKey = form.hardcoverApiKey.trim();
       const s = await bookarrApi.updateSettings(body);
       setForm({
         ...s,
         prowlarrApiKey: "",
         qbittorrentPassword: "",
         sabnzbdApiKey: "",
+        hardcoverApiKey: "",
       });
       const dc = await bookarrApi.downloadClients();
       setClientsLabel(`torrent=${dc.torrent.kind} · usenet=${dc.usenet.kind} · mode=${dc.mode}`);
@@ -71,7 +77,7 @@ export function AdminSettings() {
   return (
     <>
       <h1 className="page-title">Settings</h1>
-      <p className="page-lead">Prowlarr, download clients, and library defaults.</p>
+      <p className="page-lead">Prowlarr, metadata providers, download clients, and library defaults.</p>
       {clientsLabel && <p className="flash">Clients: {clientsLabel}</p>}
       {message && <p className="flash">{message}</p>}
       {error && <p className="flash error">{error}</p>}
@@ -187,6 +193,43 @@ export function AdminSettings() {
               <input
                 value={form.sabnzbdCategory ?? ""}
                 onChange={(e) => set("sabnzbdCategory", e.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="panel" style={{ marginBottom: "1rem" }}>
+          <div className="panel-head">
+            <h2>Metadata providers</h2>
+          </div>
+          <div className="form-grid two">
+            <label>
+              Metadata mode
+              <select
+                value={form.metadataMode ?? "auto"}
+                onChange={(e) => set("metadataMode", e.target.value)}
+              >
+                <option value="auto">auto (Open Library + optional Hardcover)</option>
+                <option value="mock">mock (offline catalog)</option>
+              </select>
+            </label>
+            <label>
+              Cache TTL (hours)
+              <input
+                type="number"
+                min={1}
+                value={form.metadataCacheTtlHours ?? 24}
+                onChange={(e) => set("metadataCacheTtlHours", Number(e.target.value))}
+              />
+            </label>
+            <label style={{ gridColumn: "1 / -1" }}>
+              Hardcover API key {form.hardcoverApiKeySet ? "(set — leave blank to keep)" : "(optional)"}
+              <input
+                value={form.hardcoverApiKey ?? ""}
+                onChange={(e) => set("hardcoverApiKey", e.target.value)}
+                type="password"
+                autoComplete="off"
+                placeholder="Bearer token from hardcover.app"
               />
             </label>
           </div>

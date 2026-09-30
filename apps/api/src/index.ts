@@ -8,6 +8,7 @@ import { openDatabase } from "./db/database.js";
 import { registerRoutes } from "./routes/index.js";
 import { DownloadClientRegistry } from "./services/download-clients/index.js";
 import { LibraryService } from "./services/library.js";
+import { MetadataService } from "./services/metadata/index.js";
 import { ProwlarrClient } from "./services/prowlarr.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,6 +41,9 @@ async function main() {
     sabnzbdUrl: process.env.SABNZBD_URL || "",
     sabnzbdApiKey: process.env.SABNZBD_API_KEY || "",
     sabnzbdCategory: process.env.SABNZBD_CATEGORY || "bookarr",
+    metadataMode: (process.env.METADATA_MODE === "mock" ? "mock" : "auto") as "mock" | "auto",
+    hardcoverApiKey: process.env.HARDCOVER_API_KEY || "",
+    metadataCacheTtlHours: Number(process.env.METADATA_CACHE_TTL_HOURS || 24),
   };
 
   const clients = new DownloadClientRegistry(bootstrapSettings);
@@ -64,11 +68,24 @@ async function main() {
     sabnzbdUrl: process.env.SABNZBD_URL || settings.sabnzbdUrl,
     sabnzbdApiKey: process.env.SABNZBD_API_KEY || settings.sabnzbdApiKey,
     sabnzbdCategory: process.env.SABNZBD_CATEGORY || settings.sabnzbdCategory,
+    metadataMode:
+      process.env.METADATA_MODE === "mock"
+        ? "mock"
+        : process.env.METADATA_MODE === "auto"
+          ? "auto"
+          : settings.metadataMode,
+    hardcoverApiKey: process.env.HARDCOVER_API_KEY || settings.hardcoverApiKey,
+    metadataCacheTtlHours: process.env.METADATA_CACHE_TTL_HOURS
+      ? Number(process.env.METADATA_CACHE_TTL_HOURS)
+      : settings.metadataCacheTtlHours,
   });
+
+  const metadata = new MetadataService(db, library.getSettings());
+  library.setMetadataService(metadata);
 
   const app = Fastify({ logger: true });
   await app.register(cors, { origin: true });
-  await registerRoutes(app, library, prowlarr, clients);
+  await registerRoutes(app, library, prowlarr, clients, metadata);
 
   const webDist = path.resolve(__dirname, "../../web/dist");
   if (fs.existsSync(webDist)) {

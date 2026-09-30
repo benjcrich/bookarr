@@ -34,6 +34,9 @@ describe("download pipeline (mock clients)", () => {
       sabnzbdUrl: "",
       sabnzbdApiKey: "",
       sabnzbdCategory: "bookarr",
+      metadataMode: "mock",
+      hardcoverApiKey: "",
+      metadataCacheTtlHours: 24,
     });
     library = new LibraryService(db, prowlarr, clients);
     library.updateSettings({

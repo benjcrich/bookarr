@@ -5,6 +5,9 @@ export function AdminDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [prowlarr, setProwlarr] = useState<{ mode: string; detail: string } | null>(null);
   const [clients, setClients] = useState<DownloadClientsHealth | null>(null);
+  const [meta, setMeta] = useState<{ mode: string; openLibrary: string; hardcover: string } | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -14,6 +17,7 @@ export function AdminDashboard() {
         setStats(h.stats);
         setProwlarr(h.prowlarr);
         setClients(h.downloadClients);
+        setMeta(h.metadata);
       })
       .catch((e: Error) => setError(e.message));
   }, []);
@@ -35,6 +39,12 @@ export function AdminDashboard() {
           Download clients ({clients.mode}): torrent <strong>{clients.torrent.kind}</strong> —{" "}
           {clients.torrent.detail}; usenet <strong>{clients.usenet.kind}</strong> —{" "}
           {clients.usenet.detail}
+        </p>
+      )}
+      {meta && (
+        <p className="flash">
+          Metadata ({meta.mode}): Open Library <strong>{meta.openLibrary}</strong>; Hardcover{" "}
+          <strong>{meta.hardcover}</strong>
         </p>
       )}
       {stats && (

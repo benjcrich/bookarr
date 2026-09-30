@@ -8,7 +8,10 @@ export interface Audiobook {
   authorName?: string;
   overview: string | null;
   asin: string | null;
+  isbn: string | null;
   narrator: string | null;
+  coverUrl: string | null;
+  runtimeMinutes: number | null;
   monitored: boolean;
   wanted: boolean;
   status: BookStatus;
@@ -22,12 +25,28 @@ export interface BookRequest {
   authorName: string;
   overview: string | null;
   asin: string | null;
+  isbn: string | null;
   narrator: string | null;
+  coverUrl: string | null;
   requesterName: string;
   status: RequestStatus;
   audiobookId: number | null;
   denyReason: string | null;
   createdAt: string;
+}
+
+export interface MetadataResult {
+  provider: string;
+  providerId: string;
+  title: string;
+  authorName: string;
+  overview: string | null;
+  coverUrl: string | null;
+  narrator: string | null;
+  runtimeMinutes: number | null;
+  asin: string | null;
+  isbn: string | null;
+  publishedYear: number | null;
 }
 
 export interface ProwlarrRelease {
@@ -86,6 +105,9 @@ export interface PublicSettings {
   sabnzbdUrl: string;
   sabnzbdApiKeySet: boolean;
   sabnzbdCategory: string;
+  metadataMode: "mock" | "auto";
+  hardcoverApiKeySet: boolean;
+  metadataCacheTtlHours: number;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -109,6 +131,7 @@ export const bookarrApi = {
       status: string;
       prowlarr: { mode: string; detail: string };
       downloadClients: DownloadClientsHealth;
+      metadata: { mode: string; openLibrary: string; hardcover: string };
       stats: Stats;
     }>("/api/health"),
   stats: () => api<Stats>("/api/stats"),
@@ -121,20 +144,32 @@ export const bookarrApi = {
   addBook: (body: {
     title: string;
     authorName: string;
-    overview?: string;
-    narrator?: string;
+    overview?: string | null;
+    narrator?: string | null;
+    asin?: string | null;
+    isbn?: string | null;
+    coverUrl?: string | null;
+    runtimeMinutes?: number | null;
     wanted?: boolean;
     monitored?: boolean;
   }) => api<Audiobook>("/api/books", { method: "POST", body: JSON.stringify(body) }),
   patchBook: (id: number, body: Partial<Pick<Audiobook, "monitored" | "wanted" | "status">>) =>
     api<Audiobook>(`/api/books/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  enrichBook: (id: number) =>
+    api<{ book: Audiobook; match: MetadataResult; providers: string[] }>(`/api/books/${id}/enrich`, {
+      method: "POST",
+      body: "{}",
+    }),
   requests: (status?: string) =>
     api<BookRequest[]>(`/api/requests${status ? `?status=${status}` : ""}`),
   createRequest: (body: {
     title: string;
     authorName: string;
-    overview?: string;
-    narrator?: string;
+    overview?: string | null;
+    narrator?: string | null;
+    asin?: string | null;
+    isbn?: string | null;
+    coverUrl?: string | null;
     requesterName: string;
   }) => api<BookRequest>("/api/requests", { method: "POST", body: JSON.stringify(body) }),
   approveRequest: (id: number) =>
@@ -145,13 +180,21 @@ export const bookarrApi = {
       body: JSON.stringify({ reason }),
     }),
   search: (q: string) => api<ProwlarrRelease[]>(`/api/search?q=${encodeURIComponent(q)}`),
+  metadataSearch: (q: string) =>
+    api<{ results: MetadataResult[]; cached: boolean; providers: string[] }>(
+      `/api/metadata/search?q=${encodeURIComponent(q)}`
+    ),
   grab: (release: ProwlarrRelease, audiobookId?: number) =>
     api<DownloadJob>("/api/grab", {
       method: "POST",
       body: JSON.stringify({ audiobookId, release }),
     }),
   downloads: () => api<DownloadJob[]>("/api/downloads"),
-  pollDownloads: () => api<{ polled: number; jobs: DownloadJob[] }>("/api/downloads/poll", { method: "POST", body: "{}" }),
+  pollDownloads: () =>
+    api<{ polled: number; jobs: DownloadJob[] }>("/api/downloads/poll", {
+      method: "POST",
+      body: "{}",
+    }),
   downloadClients: () => api<DownloadClientsHealth>("/api/download-clients"),
   indexers: () =>
     api<Array<{ id: number; name: string; protocol: string; enable: boolean }>>("/api/indexers"),
