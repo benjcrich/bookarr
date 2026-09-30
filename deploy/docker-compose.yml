@@ -1,0 +1,55 @@
+# Pull-only Bookarr deploy — no git clone / no build context required.
+# Image: ghcr.io/benjcrich/bookarr
+#
+# Quick start:
+#   curl -fsSL https://raw.githubusercontent.com/benjcrich/bookarr/main/deploy/docker-compose.yml -o docker-compose.yml
+#   curl -fsSL https://raw.githubusercontent.com/benjcrich/bookarr/main/deploy/.env.example -o .env
+#   # edit .env, then:
+#   docker compose up -d
+
+services:
+  bookarr:
+    image: ghcr.io/benjcrich/bookarr:${BOOKARR_TAG:-latest}
+    container_name: bookarr
+    ports:
+      - "${BOOKARR_PORT:-8787}:8787"
+    environment:
+      PORT: 8787
+      HOST: 0.0.0.0
+      BOOKARR_DB_PATH: /data/bookarr.db
+      BOOKARR_LIBRARY_ROOT: /data/audiobooks
+      BOOKARR_DOWNLOAD_POLL_MS: ${BOOKARR_DOWNLOAD_POLL_MS:-3000}
+      DOWNLOAD_CLIENT_MODE: ${DOWNLOAD_CLIENT_MODE:-mock}
+      METADATA_MODE: ${METADATA_MODE:-auto}
+      METADATA_CACHE_TTL_HOURS: ${METADATA_CACHE_TTL_HOURS:-24}
+      PROWLARR_URL: ${PROWLARR_URL:-}
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
+      QBITTORRENT_URL: ${QBITTORRENT_URL:-}
+      QBITTORRENT_USERNAME: ${QBITTORRENT_USERNAME:-admin}
+      QBITTORRENT_PASSWORD: ${QBITTORRENT_PASSWORD:-}
+      QBITTORRENT_CATEGORY: ${QBITTORRENT_CATEGORY:-bookarr}
+      SABNZBD_URL: ${SABNZBD_URL:-}
+      SABNZBD_API_KEY: ${SABNZBD_API_KEY:-}
+      SABNZBD_CATEGORY: ${SABNZBD_CATEGORY:-bookarr}
+      HARDCOVER_API_KEY: ${HARDCOVER_API_KEY:-}
+    volumes:
+      # SQLite DB lives under /data; library imports under /data/audiobooks
+      - bookarr-data:/data
+      # Optional: bind-mount a host library path instead of the named volume subpath
+      # - /path/on/host/audiobooks:/data/audiobooks
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  bookarr-data:

@@ -19,11 +19,47 @@ Admin UI ────┘         │
                        └── SQLite
 ```
 
-**Done:** library/wanted/monitored, request approve→library, Prowlarr search/grab, download clients (qBit/SAB/mock), **metadata providers (Open Library + optional Hardcover + mock/cache)**, admin/request UIs, docker-compose.
+**Done:** library/wanted/monitored, request approve→library, Prowlarr search/grab, download clients (qBit/SAB/mock), metadata providers, **published GHCR image + pull-only compose**, admin/request UIs.
 
 **Next:** richer rename/tagging, auth roles, quality cutoffs, notifications. See product plan in Context store `docs/audiobook-arr-plan.md`.
 
-## Quick start (local)
+## Run without cloning (recommended)
+
+Published image: **`ghcr.io/benjcrich/bookarr`** (tags: `latest` on `main`, semver on `v*` tags, `sha-*`).
+
+```bash
+# fetch compose + env template only (no git clone)
+curl -fsSL https://raw.githubusercontent.com/benjcrich/bookarr/main/deploy/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/benjcrich/bookarr/main/deploy/.env.example -o .env
+
+# edit .env (Prowlarr, download clients, ports, etc.)
+docker compose up -d
+```
+
+Open http://localhost:8787
+
+| Path / setting | Purpose |
+|----------------|---------|
+| Volume `bookarr-data` → `/data` | SQLite at `/data/bookarr.db`, library at `/data/audiobooks` |
+| `PROWLARR_URL` / `PROWLARR_API_KEY` | Indexer manager (optional; mock indexers otherwise) |
+| `DOWNLOAD_CLIENT_MODE` | `mock` (default) or `auto` + `QBITTORRENT_*` / `SABNZBD_*` |
+| `METADATA_MODE` | `auto` or `mock`; optional `HARDCOVER_API_KEY` |
+| `BOOKARR_TAG` | Image tag (default `latest`) |
+| `BOOKARR_PORT` | Host port (default `8787`) |
+
+Compose file lives at [`deploy/docker-compose.yml`](deploy/docker-compose.yml) (pull-only — no `build:`).
+
+### GHCR visibility (one-time)
+
+After the first successful publish workflow on `main`:
+
+1. Open https://github.com/benjcrich/bookarr/pkgs/container/bookarr  
+2. **Package settings → Change visibility → Public** (or grant pull access to your servers)  
+3. Private pulls need `docker login ghcr.io` with a PAT that has `read:packages`
+
+Until the package is public, unauthenticated `docker pull` may fail with 403.
+
+## Quick start (local from source)
 
 ```bash
 cp .env.example .env
@@ -41,14 +77,14 @@ npm run build
 npm start                # http://127.0.0.1:8787
 ```
 
-### Docker Compose
+### Docker Compose (build from this repo)
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-Open http://localhost:8787. With `DOWNLOAD_CLIENT_MODE=mock` (default), grab → mock download → import works without live clients.
+Root `docker-compose.yml` builds locally. Prefer [Run without cloning](#run-without-cloning-recommended) on servers.
 
 ## Metadata providers
 
