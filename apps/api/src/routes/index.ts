@@ -1,19 +1,26 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import type { DownloadClientRegistry } from "../services/download-clients/index.js";
 import type { LibraryService } from "../services/library.js";
 import type { ProwlarrClient } from "../services/prowlarr.js";
 
 export async function registerRoutes(
   app: FastifyInstance,
   library: LibraryService,
-  prowlarr: ProwlarrClient
+  prowlarr: ProwlarrClient,
+  clients: DownloadClientRegistry
 ): Promise<void> {
   app.get("/api/health", async () => {
-    const prow = await prowlarr.health();
+    const settings = library.getSettings();
+    const [prow, downloadClients] = await Promise.all([
+      prowlarr.health(),
+      clients.health(settings),
+    ]);
     return {
       status: "ok",
       service: "bookarr",
       prowlarr: prow,
+      downloadClients,
       stats: library.stats(),
     };
   });
@@ -68,7 +75,6 @@ export async function registerRoutes(
 
   app.get("/api/quality-profiles", async () => library.listQualityProfiles());
 
-  // --- Requests (end-user + admin) ---
   app.get<{ Querystring: { status?: string } }>("/api/requests", async (req) => {
     const status = req.query.status as "pending" | "approved" | "denied" | undefined;
     return library.listRequests(status);
@@ -102,7 +108,6 @@ export async function registerRoutes(
     return updated;
   });
 
-  // --- Prowlarr / search / grab ---
   app.get("/api/indexers", async () => prowlarr.listIndexers());
 
   app.get<{ Querystring: { q?: string } }>("/api/search", async (req) => {
@@ -133,14 +138,17 @@ export async function registerRoutes(
 
   app.get("/api/downloads", async () => library.listDownloads());
 
-  app.get("/api/settings", async () => {
-    const s = library.getSettings();
-    return {
-      ...s,
-      prowlarrApiKey: s.prowlarrApiKey ? "••••••••" : "",
-      prowlarrApiKeySet: Boolean(s.prowlarrApiKey),
-    };
+  app.post("/api/downloads/poll", async () => {
+    const updated = await library.pollDownloads();
+    return { polled: updated.length, jobs: library.listDownloads() };
   });
+
+  app.get("/api/download-clients", async () => {
+    const settings = library.getSettings();
+    return clients.health(settings);
+  });
+
+  app.get("/api/settings", async () => library.publicSettings());
 
   app.put("/api/settings", async (req) => {
     const body = z
@@ -150,13 +158,33 @@ export async function registerRoutes(
         libraryRoot: z.string().optional(),
         qualityProfileId: z.number().int().optional(),
         autoSearchOnApprove: z.boolean().optional(),
+        downloadClientMode: z.enum(["mock", "auto"]).optional(),
+        qbittorrentUrl: z.string().optional(),
+        qbittorrentUsername: z.string().optional(),
+        qbittorrentPassword: z.string().optional(),
+        qbittorrentCategory: z.string().optional(),
+        sabnzbdUrl: z.string().optional(),
+        sabnzbdApiKey: z.string().optional(),
+        sabnzbdCategory: z.string().optional(),
       })
       .parse(req.body);
-    const updated = library.updateSettings(body);
-    return {
-      ...updated,
-      prowlarrApiKey: updated.prowlarrApiKey ? "••••••••" : "",
-      prowlarrApiKeySet: Boolean(updated.prowlarrApiKey),
-    };
+
+    // Don't overwrite secrets with masked placeholders
+    const patch = { ...body } as Record<string, unknown>;
+    if (patch.prowlarrApiKey === "••••••••") delete patch.prowlarrApiKey;
+    if (patch.qbittorrentPassword === "••••••••") delete patch.qbittorrentPassword;
+    if (patch.sabnzbdApiKey === "••••••••") delete patch.sabnzbdApiKey;
+    if (typeof patch.prowlarrApiKey === "string" && !patch.prowlarrApiKey.trim()) {
+      delete patch.prowlarrApiKey;
+    }
+    if (typeof patch.qbittorrentPassword === "string" && !patch.qbittorrentPassword.trim()) {
+      delete patch.qbittorrentPassword;
+    }
+    if (typeof patch.sabnzbdApiKey === "string" && !patch.sabnzbdApiKey.trim()) {
+      delete patch.sabnzbdApiKey;
+    }
+
+    library.updateSettings(patch);
+    return library.publicSettings();
   });
 }

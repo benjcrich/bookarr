@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { bookarrApi, type Stats } from "../api/client";
+import { bookarrApi, type DownloadClientsHealth, type Stats } from "../api/client";
 
 export function AdminDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [prowlarr, setProwlarr] = useState<{ mode: string; detail: string } | null>(null);
+  const [clients, setClients] = useState<DownloadClientsHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -12,6 +13,7 @@ export function AdminDashboard() {
       .then((h) => {
         setStats(h.stats);
         setProwlarr(h.prowlarr);
+        setClients(h.downloadClients);
       })
       .catch((e: Error) => setError(e.message));
   }, []);
@@ -20,12 +22,19 @@ export function AdminDashboard() {
     <>
       <h1 className="page-title">Dashboard</h1>
       <p className="page-lead">
-        Library overview, pending requests, and Prowlarr connectivity for Bookarr.
+        Library overview, pending requests, Prowlarr, and download clients.
       </p>
       {error && <p className="flash error">{error}</p>}
       {prowlarr && (
         <p className="flash">
           Prowlarr mode: <strong>{prowlarr.mode}</strong> — {prowlarr.detail}
+        </p>
+      )}
+      {clients && (
+        <p className="flash">
+          Download clients ({clients.mode}): torrent <strong>{clients.torrent.kind}</strong> —{" "}
+          {clients.torrent.detail}; usenet <strong>{clients.usenet.kind}</strong> —{" "}
+          {clients.usenet.detail}
         </p>
       )}
       {stats && (
@@ -43,8 +52,8 @@ export function AdminDashboard() {
             <span>Pending requests</span>
           </div>
           <div className="stat">
-            <strong>{stats.downloads}</strong>
-            <span>Download jobs</span>
+            <strong>{stats.activeDownloads ?? stats.downloads}</strong>
+            <span>Active downloads</span>
           </div>
         </div>
       )}
@@ -53,8 +62,8 @@ export function AdminDashboard() {
           <h2>Pipeline</h2>
         </div>
         <div className="empty">
-          Request → approve → mark wanted/monitored → Prowlarr search → grab → download client
-          (hook) → library import (next).
+          Request → approve → wanted/monitored → Prowlarr search → grab → qBittorrent/SABnzbd (or
+          mock) → poll → import into library root.
         </div>
       </div>
     </>
