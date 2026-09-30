@@ -1,6 +1,13 @@
 export type BookStatus = "wanted" | "monitored" | "downloading" | "available" | "missing";
 export type RequestStatus = "pending" | "approved" | "denied";
-export type DownloadStatus = "queued" | "grabbed" | "failed" | "completed";
+export type DownloadStatus =
+  | "queued"
+  | "grabbed"
+  | "downloading"
+  | "completed"
+  | "imported"
+  | "failed";
+export type DownloadClientKind = "mock" | "qbittorrent" | "sabnzbd";
 
 export interface Author {
   id: number;
@@ -60,6 +67,11 @@ export interface DownloadJob {
   protocol: string;
   size: number | null;
   error: string | null;
+  client: DownloadClientKind | null;
+  externalId: string | null;
+  progress: number;
+  outputPath: string | null;
+  importPath: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -70,6 +82,15 @@ export interface AppSettings {
   libraryRoot: string;
   qualityProfileId: number;
   autoSearchOnApprove: boolean;
+  /** mock = always mock clients; auto = live when credentials set */
+  downloadClientMode: "mock" | "auto";
+  qbittorrentUrl: string;
+  qbittorrentUsername: string;
+  qbittorrentPassword: string;
+  qbittorrentCategory: string;
+  sabnzbdUrl: string;
+  sabnzbdApiKey: string;
+  sabnzbdCategory: string;
 }
 
 export interface ProwlarrIndexer {
@@ -93,4 +114,17 @@ export interface ProwlarrRelease {
   infoUrl?: string;
   seeders?: number;
   leechers?: number;
+}
+
+export interface RemoteDownloadStatus {
+  state: "queued" | "downloading" | "completed" | "failed";
+  progress: number;
+  outputPath: string | null;
+  error?: string | null;
+}
+
+export interface AddDownloadResult {
+  accepted: boolean;
+  externalId: string;
+  detail: string;
 }

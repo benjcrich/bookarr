@@ -221,9 +221,34 @@ textarea {
   color: #f0a39a;
 }
 
-.badge.downloading {
+.badge.downloading,
+.badge.queued,
+.badge.grabbed {
   background: rgba(61, 122, 106, 0.25);
   color: #9fd4c5;
+}
+
+.badge.imported {
+  background: rgba(111, 159, 106, 0.22);
+  color: #b5dfb0;
+}
+
+.progress {
+  margin-top: 0.55rem;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(243, 232, 216, 0.08);
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #e8a35a);
+  transition: width 280ms ease;
+}
+
+.download-row {
+  grid-template-columns: 1.6fr 0.8fr auto;
 }
 
 .actions {

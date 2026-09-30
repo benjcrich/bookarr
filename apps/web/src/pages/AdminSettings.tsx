@@ -1,47 +1,68 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { bookarrApi } from "../api/client";
+import { bookarrApi, type PublicSettings } from "../api/client";
 
 export function AdminSettings() {
-  const [prowlarrUrl, setProwlarrUrl] = useState("");
-  const [prowlarrApiKey, setProwlarrApiKey] = useState("");
-  const [libraryRoot, setLibraryRoot] = useState("");
-  const [autoSearchOnApprove, setAutoSearchOnApprove] = useState(true);
-  const [keySet, setKeySet] = useState(false);
+  const [form, setForm] = useState<Partial<PublicSettings> & {
+    prowlarrApiKey?: string;
+    qbittorrentPassword?: string;
+    sabnzbdApiKey?: string;
+  }>({});
   const [indexers, setIndexers] = useState<Array<{ id: number; name: string; protocol: string; enable: boolean }>>(
     []
   );
+  const [clientsLabel, setClientsLabel] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([bookarrApi.settings(), bookarrApi.indexers()])
-      .then(([s, idx]) => {
-        setProwlarrUrl(s.prowlarrUrl);
-        setLibraryRoot(s.libraryRoot);
-        setAutoSearchOnApprove(s.autoSearchOnApprove);
-        setKeySet(s.prowlarrApiKeySet);
+    Promise.all([bookarrApi.settings(), bookarrApi.indexers(), bookarrApi.downloadClients()])
+      .then(([s, idx, dc]) => {
+        setForm({
+          ...s,
+          prowlarrApiKey: "",
+          qbittorrentPassword: "",
+          sabnzbdApiKey: "",
+        });
         setIndexers(idx);
+        setClientsLabel(
+          `torrent=${dc.torrent.kind} · usenet=${dc.usenet.kind} · mode=${dc.mode}`
+        );
       })
       .catch((e: Error) => setError(e.message));
   }, []);
+
+  function set<K extends string>(key: K, value: unknown) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
 
   async function onSave(e: FormEvent) {
     e.preventDefault();
     setError(null);
     try {
       const body: Record<string, unknown> = {
-        prowlarrUrl,
-        libraryRoot,
-        autoSearchOnApprove,
+        prowlarrUrl: form.prowlarrUrl,
+        libraryRoot: form.libraryRoot,
+        autoSearchOnApprove: form.autoSearchOnApprove,
+        downloadClientMode: form.downloadClientMode,
+        qbittorrentUrl: form.qbittorrentUrl,
+        qbittorrentUsername: form.qbittorrentUsername,
+        qbittorrentCategory: form.qbittorrentCategory,
+        sabnzbdUrl: form.sabnzbdUrl,
+        sabnzbdCategory: form.sabnzbdCategory,
       };
-      if (prowlarrApiKey.trim()) body.prowlarrApiKey = prowlarrApiKey.trim();
-      await bookarrApi.updateSettings(body);
+      if (form.prowlarrApiKey?.trim()) body.prowlarrApiKey = form.prowlarrApiKey.trim();
+      if (form.qbittorrentPassword?.trim()) body.qbittorrentPassword = form.qbittorrentPassword.trim();
+      if (form.sabnzbdApiKey?.trim()) body.sabnzbdApiKey = form.sabnzbdApiKey.trim();
+      const s = await bookarrApi.updateSettings(body);
+      setForm({
+        ...s,
+        prowlarrApiKey: "",
+        qbittorrentPassword: "",
+        sabnzbdApiKey: "",
+      });
+      const dc = await bookarrApi.downloadClients();
+      setClientsLabel(`torrent=${dc.torrent.kind} · usenet=${dc.usenet.kind} · mode=${dc.mode}`);
       setMessage("Settings saved.");
-      setProwlarrApiKey("");
-      const idx = await bookarrApi.indexers();
-      setIndexers(idx);
-      const s = await bookarrApi.settings();
-      setKeySet(s.prowlarrApiKeySet);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -50,51 +71,135 @@ export function AdminSettings() {
   return (
     <>
       <h1 className="page-title">Settings</h1>
-      <p className="page-lead">Prowlarr connection and library defaults.</p>
+      <p className="page-lead">Prowlarr, download clients, and library defaults.</p>
+      {clientsLabel && <p className="flash">Clients: {clientsLabel}</p>}
       {message && <p className="flash">{message}</p>}
       {error && <p className="flash error">{error}</p>}
-      <div className="panel" style={{ marginBottom: "1rem" }}>
-        <div className="panel-head">
-          <h2>Configuration</h2>
-        </div>
-        <form className="form-grid" onSubmit={onSave}>
-          <label>
-            Prowlarr URL
-            <input
-              value={prowlarrUrl}
-              onChange={(e) => setProwlarrUrl(e.target.value)}
-              placeholder="http://prowlarr:9696"
-            />
-          </label>
-          <label>
-            Prowlarr API key {keySet ? "(set — leave blank to keep)" : ""}
-            <input
-              value={prowlarrApiKey}
-              onChange={(e) => setProwlarrApiKey(e.target.value)}
-              placeholder="••••••••"
-              type="password"
-              autoComplete="off"
-            />
-          </label>
-          <label>
-            Library root
-            <input value={libraryRoot} onChange={(e) => setLibraryRoot(e.target.value)} />
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--ink)" }}>
-            <input
-              type="checkbox"
-              checked={autoSearchOnApprove}
-              onChange={(e) => setAutoSearchOnApprove(e.target.checked)}
-            />
-            Auto-search & grab on request approve
-          </label>
-          <div>
-            <button className="btn primary" type="submit">
-              Save
-            </button>
+
+      <form onSubmit={onSave}>
+        <div className="panel" style={{ marginBottom: "1rem" }}>
+          <div className="panel-head">
+            <h2>General</h2>
           </div>
-        </form>
-      </div>
+          <div className="form-grid">
+            <label>
+              Prowlarr URL
+              <input
+                value={form.prowlarrUrl ?? ""}
+                onChange={(e) => set("prowlarrUrl", e.target.value)}
+                placeholder="http://prowlarr:9696"
+              />
+            </label>
+            <label>
+              Prowlarr API key {form.prowlarrApiKeySet ? "(set — leave blank to keep)" : ""}
+              <input
+                value={form.prowlarrApiKey ?? ""}
+                onChange={(e) => set("prowlarrApiKey", e.target.value)}
+                type="password"
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              Library root
+              <input
+                value={form.libraryRoot ?? ""}
+                onChange={(e) => set("libraryRoot", e.target.value)}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--ink)" }}>
+              <input
+                type="checkbox"
+                checked={Boolean(form.autoSearchOnApprove)}
+                onChange={(e) => set("autoSearchOnApprove", e.target.checked)}
+              />
+              Auto-search & grab on request approve
+            </label>
+          </div>
+        </div>
+
+        <div className="panel" style={{ marginBottom: "1rem" }}>
+          <div className="panel-head">
+            <h2>Download clients</h2>
+          </div>
+          <div className="form-grid">
+            <label>
+              Client mode
+              <select
+                value={form.downloadClientMode ?? "mock"}
+                onChange={(e) => set("downloadClientMode", e.target.value)}
+              >
+                <option value="mock">mock (no live clients)</option>
+                <option value="auto">auto (use qBit/SAB when configured)</option>
+              </select>
+            </label>
+          </div>
+          <div className="form-grid two" style={{ paddingTop: 0 }}>
+            <label>
+              qBittorrent URL
+              <input
+                value={form.qbittorrentUrl ?? ""}
+                onChange={(e) => set("qbittorrentUrl", e.target.value)}
+                placeholder="http://qbittorrent:8080"
+              />
+            </label>
+            <label>
+              qBittorrent username
+              <input
+                value={form.qbittorrentUsername ?? ""}
+                onChange={(e) => set("qbittorrentUsername", e.target.value)}
+              />
+            </label>
+            <label>
+              qBittorrent password {form.qbittorrentPasswordSet ? "(set)" : ""}
+              <input
+                value={form.qbittorrentPassword ?? ""}
+                onChange={(e) => set("qbittorrentPassword", e.target.value)}
+                type="password"
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              qBittorrent category
+              <input
+                value={form.qbittorrentCategory ?? ""}
+                onChange={(e) => set("qbittorrentCategory", e.target.value)}
+              />
+            </label>
+            <label>
+              SABnzbd URL
+              <input
+                value={form.sabnzbdUrl ?? ""}
+                onChange={(e) => set("sabnzbdUrl", e.target.value)}
+                placeholder="http://sabnzbd:8080"
+              />
+            </label>
+            <label>
+              SABnzbd API key {form.sabnzbdApiKeySet ? "(set)" : ""}
+              <input
+                value={form.sabnzbdApiKey ?? ""}
+                onChange={(e) => set("sabnzbdApiKey", e.target.value)}
+                type="password"
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              SABnzbd category
+              <input
+                value={form.sabnzbdCategory ?? ""}
+                onChange={(e) => set("sabnzbdCategory", e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="form-grid" style={{ paddingTop: 0 }}>
+            <div>
+              <button className="btn primary" type="submit">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
+
       <div className="panel">
         <div className="panel-head">
           <h2>Indexers (via Prowlarr)</h2>

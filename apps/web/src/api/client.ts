@@ -50,6 +50,12 @@ export interface DownloadJob {
   indexerName: string | null;
   protocol: string;
   size: number | null;
+  client: string | null;
+  externalId: string | null;
+  progress: number;
+  outputPath: string | null;
+  importPath: string | null;
+  error: string | null;
   createdAt: string;
 }
 
@@ -58,6 +64,28 @@ export interface Stats {
   wanted: number;
   pendingRequests: number;
   downloads: number;
+  activeDownloads?: number;
+}
+
+export interface DownloadClientsHealth {
+  mode: string;
+  torrent: { kind: string; ok: boolean; mode: string; detail: string };
+  usenet: { kind: string; ok: boolean; mode: string; detail: string };
+}
+
+export interface PublicSettings {
+  prowlarrUrl: string;
+  prowlarrApiKeySet: boolean;
+  libraryRoot: string;
+  autoSearchOnApprove: boolean;
+  downloadClientMode: "mock" | "auto";
+  qbittorrentUrl: string;
+  qbittorrentUsername: string;
+  qbittorrentPasswordSet: boolean;
+  qbittorrentCategory: string;
+  sabnzbdUrl: string;
+  sabnzbdApiKeySet: boolean;
+  sabnzbdCategory: string;
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -76,7 +104,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const bookarrApi = {
-  health: () => api<{ status: string; prowlarr: { mode: string; detail: string }; stats: Stats }>("/api/health"),
+  health: () =>
+    api<{
+      status: string;
+      prowlarr: { mode: string; detail: string };
+      downloadClients: DownloadClientsHealth;
+      stats: Stats;
+    }>("/api/health"),
   stats: () => api<Stats>("/api/stats"),
   books: (params?: { wanted?: boolean }) => {
     const qs = new URLSearchParams();
@@ -117,15 +151,11 @@ export const bookarrApi = {
       body: JSON.stringify({ audiobookId, release }),
     }),
   downloads: () => api<DownloadJob[]>("/api/downloads"),
+  pollDownloads: () => api<{ polled: number; jobs: DownloadJob[] }>("/api/downloads/poll", { method: "POST", body: "{}" }),
+  downloadClients: () => api<DownloadClientsHealth>("/api/download-clients"),
   indexers: () =>
     api<Array<{ id: number; name: string; protocol: string; enable: boolean }>>("/api/indexers"),
-  settings: () =>
-    api<{
-      prowlarrUrl: string;
-      prowlarrApiKeySet: boolean;
-      libraryRoot: string;
-      autoSearchOnApprove: boolean;
-    }>("/api/settings"),
+  settings: () => api<PublicSettings>("/api/settings"),
   updateSettings: (body: Record<string, unknown>) =>
-    api("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
+    api<PublicSettings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
 };

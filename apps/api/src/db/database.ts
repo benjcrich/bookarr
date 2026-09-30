@@ -73,6 +73,11 @@ function migrate(db: Database.Database): void {
       protocol TEXT NOT NULL DEFAULT 'torrent',
       size INTEGER,
       error TEXT,
+      client TEXT,
+      external_id TEXT,
+      progress REAL NOT NULL DEFAULT 0,
+      output_path TEXT,
+      import_path TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -82,6 +87,19 @@ function migrate(db: Database.Database): void {
       value TEXT NOT NULL
     );
   `);
+
+  // Additive migrations for DBs created before download-client columns existed
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info(download_jobs)").all() as Array<{ name: string }>).map((c) => c.name)
+  );
+  const add = (name: string, ddl: string) => {
+    if (!cols.has(name)) db.exec(`ALTER TABLE download_jobs ADD COLUMN ${ddl}`);
+  };
+  add("client", "client TEXT");
+  add("external_id", "external_id TEXT");
+  add("progress", "progress REAL NOT NULL DEFAULT 0");
+  add("output_path", "output_path TEXT");
+  add("import_path", "import_path TEXT");
 }
 
 function seedIfEmpty(db: Database.Database): void {
@@ -151,6 +169,14 @@ function seedIfEmpty(db: Database.Database): void {
     libraryRoot: process.env.BOOKARR_LIBRARY_ROOT || "/data/audiobooks",
     qualityProfileId: "2",
     autoSearchOnApprove: "true",
+    downloadClientMode: process.env.DOWNLOAD_CLIENT_MODE || "mock",
+    qbittorrentUrl: process.env.QBITTORRENT_URL || "",
+    qbittorrentUsername: process.env.QBITTORRENT_USERNAME || "admin",
+    qbittorrentPassword: process.env.QBITTORRENT_PASSWORD || "",
+    qbittorrentCategory: process.env.QBITTORRENT_CATEGORY || "bookarr",
+    sabnzbdUrl: process.env.SABNZBD_URL || "",
+    sabnzbdApiKey: process.env.SABNZBD_API_KEY || "",
+    sabnzbdCategory: process.env.SABNZBD_CATEGORY || "bookarr",
   };
   const set = db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`);
   for (const [k, v] of Object.entries(defaults)) set.run(k, v);

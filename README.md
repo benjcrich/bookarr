@@ -1,33 +1,36 @@
 # Bookarr
 
-Radarr/Sonarr-style **audiobook** automation: track wanted titles, search/grab via **Prowlarr**, and expose an Overseerr-style **request UI** for non-admins.
+Radarr/Sonarr-style **audiobook** automation: track wanted titles, search/grab via **Prowlarr**, send to **qBittorrent / SABnzbd**, import into a library, and expose an Overseerr-style **request UI**.
 
 ## Architecture
 
 | Piece | Stack | Role |
 |-------|--------|------|
-| `apps/api` | TypeScript, Fastify, SQLite | Domain + REST API + Prowlarr client |
+| `apps/api` | TypeScript, Fastify, SQLite | Domain, REST, Prowlarr + download clients |
 | `apps/web` | React, Vite, React Router | Admin UI (`/admin`) + Request UI (`/request`) |
 | Compose | Node image | Single process serves API + built SPA |
 
 ```
 Request UI ──┐
-             ├──► Bookarr API ──► Prowlarr (indexers) ──► download jobs (hooks)
+             ├──► Bookarr API ──► Prowlarr (indexers)
 Admin UI ────┘         │
-                       └── SQLite (authors, books, requests, downloads, settings)
+                       ├──► qBittorrent / SABnzbd / mock
+                       ├──► poll progress → import hook → library root
+                       └── SQLite
 ```
 
-**Done in this slice:** library/wanted/monitored domain, request approve→library pipeline, Prowlarr search/grab (live or mock fallback), admin + request UIs, docker-compose.
+**Done:** library/wanted/monitored, request approve→library, Prowlarr search/grab, **download-client adapters (qBit + SAB + mock)**, poll + import stub, admin/request UIs, docker-compose.
 
-**Next:** download-client adapters, metadata providers, auth roles, quality cutoffs, library import/rename. See also the product plan in the agent Context store (`docs/audiobook-arr-plan.md`).
+**Next:** richer rename/metadata, auth roles, quality cutoffs, notifications. See product plan in Context store `docs/audiobook-arr-plan.md`.
 
 ## Quick start (local)
 
 ```bash
 cp .env.example .env
 npm install
-npm run dev:api    # http://127.0.0.1:8787
-npm run dev:web    # http://127.0.0.1:5173 (proxies /api)
+npm test                 # mock download pipeline tests
+npm run dev:api          # http://127.0.0.1:8787
+npm run dev:web          # http://127.0.0.1:5173 (proxies /api)
 ```
 
 Or production-style (API serves built UI):
@@ -35,20 +38,28 @@ Or production-style (API serves built UI):
 ```bash
 npm install
 npm run build
-npm start          # http://127.0.0.1:8787
+npm start                # http://127.0.0.1:8787
 ```
 
 ### Docker Compose
 
 ```bash
 cp .env.example .env
-# optional: set PROWLARR_URL / PROWLARR_API_KEY
 docker compose up --build
 ```
 
-Open http://localhost:8787 — landing page links to **Admin** and **Request**.
+Open http://localhost:8787. With `DOWNLOAD_CLIENT_MODE=mock` (default), grab → mock download → import works without live clients.
 
-Without Prowlarr configured, Bookarr uses **mock indexers** so search/grab still works end-to-end.
+## Configuring download clients
+
+1. Set `DOWNLOAD_CLIENT_MODE=auto` (or Admin → Settings → Client mode = auto).
+2. **Torrents:** `QBITTORRENT_URL`, username/password, optional `QBITTORRENT_CATEGORY`.
+3. **Usenet:** `SABNZBD_URL`, `SABNZBD_API_KEY`, optional `SABNZBD_CATEGORY`.
+4. Save in Admin → Settings, or restart with env vars.
+
+Protocol routing: `torrent` → qBittorrent (or mock); `usenet` → SABnzbd (or mock).
+
+On completion Bookarr runs an import hook under `BOOKARR_LIBRARY_ROOT` as `Author/Title/`. If the client output path is not readable locally, it **stubs** gracefully (creates the folder + `.bookarr-imported` marker).
 
 ## Environment variables
 
@@ -57,26 +68,31 @@ Without Prowlarr configured, Bookarr uses **mock indexers** so search/grab still
 | `PORT` | `8787` | API listen port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `BOOKARR_DB_PATH` | `./data/bookarr.db` | SQLite path |
-| `BOOKARR_LIBRARY_ROOT` | `/data/audiobooks` | Future import root |
-| `PROWLARR_URL` | _(empty)_ | e.g. `http://localhost:9696` |
-| `PROWLARR_API_KEY` | _(empty)_ | Prowlarr Settings → General → API Key |
+| `BOOKARR_LIBRARY_ROOT` | `/data/audiobooks` | Import root |
+| `BOOKARR_DOWNLOAD_POLL_MS` | `3000` | Background poll interval |
+| `BOOKARR_MOCK_DOWNLOAD_MS` | `1500` | Mock client completion delay |
+| `PROWLARR_URL` / `PROWLARR_API_KEY` | _(empty)_ | Indexer manager |
+| `DOWNLOAD_CLIENT_MODE` | `mock` | `mock` or `auto` |
+| `QBITTORRENT_*` | _(empty)_ | URL, user, password, category |
+| `SABNZBD_*` | _(empty)_ | URL, API key, category |
 
-Settings can also be edited in **Admin → Settings** (persisted in SQLite; env wins on boot when set).
+Settings can also be edited in **Admin → Settings** (env wins on boot when set).
 
 ## Key API routes
 
-- `GET /api/health` — service + Prowlarr mode
-- `GET/POST /api/books` — library
-- `GET/POST /api/requests`, `POST /api/requests/:id/approve|deny`
-- `GET /api/indexers`, `GET /api/search?q=`, `POST /api/grab`
-- `GET /api/downloads`, `GET/PUT /api/settings`
+- `GET /api/health` — Prowlarr + download-client health
+- `GET/POST /api/books`, requests, search, grab
+- `GET /api/downloads`, `POST /api/downloads/poll`
+- `GET /api/download-clients`
+- `GET/PUT /api/settings`
 
 ## Request → library flow
 
 1. User submits a request in `/request`
 2. Admin approves in `/admin/requests`
-3. Audiobook is created as **wanted/monitored**
-4. If auto-search is on, Bookarr searches Prowlarr and enqueues a **download job** (grab)
+3. Audiobook marked **wanted/monitored**
+4. Search/grab sends release to download client
+5. Poller updates progress; on complete → import hook → **available**
 
 ## License
 

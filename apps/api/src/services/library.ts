@@ -8,6 +8,8 @@ import type {
   QualityProfile,
   RequestStatus,
 } from "../domain/types.js";
+import type { DownloadClientRegistry } from "./download-clients/index.js";
+import { importCompletedDownload } from "./importer.js";
 import type { ProwlarrClient } from "./prowlarr.js";
 
 function mapAuthor(row: Record<string, unknown>): Author {
@@ -68,19 +70,34 @@ function mapJob(row: Record<string, unknown>): DownloadJob {
     protocol: String(row.protocol),
     size: row.size != null ? Number(row.size) : null,
     error: row.error != null ? String(row.error) : null,
+    client: row.client != null ? (String(row.client) as DownloadJob["client"]) : null,
+    externalId: row.external_id != null ? String(row.external_id) : null,
+    progress: Number(row.progress ?? 0),
+    outputPath: row.output_path != null ? String(row.output_path) : null,
+    importPath: row.import_path != null ? String(row.import_path) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
 }
 
+function envOr(map: Record<string, string>, key: string, envName: string, fallback = ""): string {
+  const fromEnv = process.env[envName];
+  if (fromEnv != null && fromEnv !== "") return fromEnv;
+  return map[key] ?? fallback;
+}
+
 export class LibraryService {
   constructor(
     private db: Database.Database,
-    private prowlarr: ProwlarrClient
+    private prowlarr: ProwlarrClient,
+    private clients: DownloadClientRegistry
   ) {}
 
   listAuthors(): Author[] {
-    return this.db.prepare("SELECT * FROM authors ORDER BY name").all().map((r) => mapAuthor(r as Record<string, unknown>));
+    return this.db
+      .prepare("SELECT * FROM authors ORDER BY name")
+      .all()
+      .map((r) => mapAuthor(r as Record<string, unknown>));
   }
 
   listBooks(filter?: { wanted?: boolean; monitored?: boolean }): Audiobook[] {
@@ -100,7 +117,10 @@ export class LibraryService {
       params.push(filter.monitored ? 1 : 0);
     }
     sql += " ORDER BY a.name, b.title";
-    return this.db.prepare(sql).all(...params).map((r) => mapBook(r as Record<string, unknown>));
+    return this.db
+      .prepare(sql)
+      .all(...params)
+      .map((r) => mapBook(r as Record<string, unknown>));
   }
 
   getBook(id: number): Audiobook | null {
@@ -295,7 +315,6 @@ export class LibraryService {
 
     const settings = this.getSettings();
     if (settings.autoSearchOnApprove) {
-      // Fire-and-forget search enqueue: create download jobs from top release (hook)
       const releases = await this.prowlarr.search(`${req.title} ${req.authorName}`);
       if (releases[0]) {
         await this.enqueueGrab({
@@ -326,6 +345,17 @@ export class LibraryService {
       .map((r) => mapJob(r as Record<string, unknown>));
   }
 
+  getDownload(id: number): DownloadJob | null {
+    const row = this.db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(id);
+    return row ? mapJob(row as Record<string, unknown>) : null;
+  }
+
+  /**
+   * Grab → download-client pipeline:
+   * 1) record job
+   * 2) optionally notify Prowlarr
+   * 3) send torrent/nzb URL to configured (or mock) client
+   */
   async enqueueGrab(input: {
     audiobookId?: number | null;
     release: {
@@ -339,17 +369,14 @@ export class LibraryService {
       magnetUrl?: string;
     };
   }): Promise<DownloadJob> {
-    const grab = await this.prowlarr.grab({
-      guid: input.release.guid,
-      indexerId: input.release.indexerId,
-    });
+    const settings = this.getSettings();
+    const downloadUrl = input.release.downloadUrl ?? input.release.magnetUrl ?? null;
 
-    const status = grab.accepted ? "grabbed" : "failed";
     const info = this.db
       .prepare(
         `INSERT INTO download_jobs
-          (audiobook_id, title, indexer_id, indexer_name, guid, download_url, status, protocol, size, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (audiobook_id, title, indexer_id, indexer_name, guid, download_url, status, protocol, size, progress)
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, 0)`
       )
       .run(
         input.audiobookId ?? null,
@@ -357,48 +384,244 @@ export class LibraryService {
         input.release.indexerId,
         input.release.indexer,
         input.release.guid,
-        input.release.downloadUrl ?? input.release.magnetUrl ?? null,
-        status,
+        downloadUrl,
         input.release.protocol,
-        input.release.size,
-        grab.accepted ? null : grab.detail
+        input.release.size
       );
+    const jobId = Number(info.lastInsertRowid);
 
-    if (input.audiobookId && grab.accepted) {
+    // Best-effort Prowlarr notify (does not block client send)
+    if (this.prowlarr.configured) {
+      try {
+        await this.prowlarr.grab({
+          guid: input.release.guid,
+          indexerId: input.release.indexerId,
+        });
+      } catch {
+        /* ignore — we send to our own client */
+      }
+    }
+
+    const client = this.clients.forProtocol(input.release.protocol, settings.downloadClientMode);
+    const added = await client.add({
+      title: input.release.title,
+      downloadUrl: input.release.downloadUrl,
+      magnetUrl: input.release.magnetUrl,
+      category:
+        client.protocol === "usenet" ? settings.sabnzbdCategory : settings.qbittorrentCategory,
+      size: input.release.size,
+    });
+
+    if (!added.accepted) {
+      this.db
+        .prepare(
+          `UPDATE download_jobs SET
+            status = 'failed', client = ?, error = ?, updated_at = datetime('now')
+           WHERE id = ?`
+        )
+        .run(client.kind, added.detail, jobId);
+      return this.getDownload(jobId)!;
+    }
+
+    this.db
+      .prepare(
+        `UPDATE download_jobs SET
+          status = 'downloading',
+          client = ?,
+          external_id = ?,
+          progress = 0,
+          error = NULL,
+          updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(client.kind, added.externalId, jobId);
+
+    if (input.audiobookId) {
       this.updateBookFlags(input.audiobookId, { status: "downloading", wanted: true, monitored: true });
     }
 
-    return mapJob(
-      this.db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(info.lastInsertRowid) as Record<string, unknown>
-    );
+    return this.getDownload(jobId)!;
+  }
+
+  /** Poll active jobs against download clients; import when complete. */
+  async pollDownloads(): Promise<DownloadJob[]> {
+    const active = this.db
+      .prepare(
+        `SELECT * FROM download_jobs
+         WHERE status IN ('queued', 'grabbed', 'downloading')
+         ORDER BY id ASC`
+      )
+      .all()
+      .map((r) => mapJob(r as Record<string, unknown>));
+
+    const settings = this.getSettings();
+    const updated: DownloadJob[] = [];
+
+    for (const job of active) {
+      if (!job.externalId || !job.client) continue;
+      const client = this.clients.forProtocol(job.protocol, settings.downloadClientMode);
+      // Prefer the adapter that matches stored kind when possible
+      const adapter =
+        job.client === "qbittorrent" && settings.downloadClientMode === "auto"
+          ? this.clients.forProtocol("torrent", "auto")
+          : job.client === "sabnzbd" && settings.downloadClientMode === "auto"
+            ? this.clients.forProtocol("usenet", "auto")
+            : client;
+
+      let remote;
+      try {
+        remote = await adapter.status(job.externalId);
+      } catch (err) {
+        this.db
+          .prepare(
+            `UPDATE download_jobs SET error = ?, updated_at = datetime('now') WHERE id = ?`
+          )
+          .run((err as Error).message, job.id);
+        updated.push(this.getDownload(job.id)!);
+        continue;
+      }
+
+      if (remote.state === "failed") {
+        this.db
+          .prepare(
+            `UPDATE download_jobs SET
+              status = 'failed', progress = ?, output_path = ?, error = ?, updated_at = datetime('now')
+             WHERE id = ?`
+          )
+          .run(remote.progress, remote.outputPath, remote.error ?? "Download failed", job.id);
+        updated.push(this.getDownload(job.id)!);
+        continue;
+      }
+
+      if (remote.state === "completed") {
+        await this.completeAndImport(job, remote.outputPath, remote.progress);
+        updated.push(this.getDownload(job.id)!);
+        continue;
+      }
+
+      this.db
+        .prepare(
+          `UPDATE download_jobs SET
+            status = 'downloading', progress = ?, output_path = COALESCE(?, output_path),
+            updated_at = datetime('now')
+           WHERE id = ?`
+        )
+        .run(remote.progress, remote.outputPath, job.id);
+      updated.push(this.getDownload(job.id)!);
+    }
+
+    return updated;
+  }
+
+  private async completeAndImport(
+    job: DownloadJob,
+    outputPath: string | null,
+    progress: number
+  ): Promise<void> {
+    const settings = this.getSettings();
+    const book = job.audiobookId ? this.getBook(job.audiobookId) : null;
+    const authorName = book?.authorName ?? null;
+
+    this.db
+      .prepare(
+        `UPDATE download_jobs SET
+          status = 'completed', progress = ?, output_path = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(progress || 100, outputPath, job.id);
+
+    const imported = importCompletedDownload({
+      libraryRoot: settings.libraryRoot,
+      book,
+      title: job.title,
+      authorName,
+      outputPath,
+    });
+
+    this.db
+      .prepare(
+        `UPDATE download_jobs SET
+          status = ?, import_path = ?, error = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(
+        imported.ok ? "imported" : "failed",
+        imported.importPath,
+        imported.ok ? (imported.stub ? imported.detail : null) : imported.detail,
+        job.id
+      );
+
+    if (imported.ok && job.audiobookId) {
+      this.updateBookFlags(job.audiobookId, {
+        status: "available",
+        wanted: false,
+        monitored: true,
+        path: imported.importPath,
+      });
+    }
   }
 
   getSettings(): AppSettings {
     const rows = this.db.prepare("SELECT key, value FROM settings").all() as Array<{ key: string; value: string }>;
     const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const modeRaw = envOr(map, "downloadClientMode", "DOWNLOAD_CLIENT_MODE", "mock");
     return {
-      prowlarrUrl: process.env.PROWLARR_URL || map.prowlarrUrl || "",
-      prowlarrApiKey: process.env.PROWLARR_API_KEY || map.prowlarrApiKey || "",
-      libraryRoot: process.env.BOOKARR_LIBRARY_ROOT || map.libraryRoot || "/data/audiobooks",
+      prowlarrUrl: envOr(map, "prowlarrUrl", "PROWLARR_URL"),
+      prowlarrApiKey: envOr(map, "prowlarrApiKey", "PROWLARR_API_KEY"),
+      libraryRoot: envOr(map, "libraryRoot", "BOOKARR_LIBRARY_ROOT", "/data/audiobooks"),
       qualityProfileId: Number(map.qualityProfileId || 1),
       autoSearchOnApprove: (map.autoSearchOnApprove ?? "true") === "true",
+      downloadClientMode: modeRaw === "auto" ? "auto" : "mock",
+      qbittorrentUrl: envOr(map, "qbittorrentUrl", "QBITTORRENT_URL"),
+      qbittorrentUsername: envOr(map, "qbittorrentUsername", "QBITTORRENT_USERNAME", "admin"),
+      qbittorrentPassword: envOr(map, "qbittorrentPassword", "QBITTORRENT_PASSWORD"),
+      qbittorrentCategory: envOr(map, "qbittorrentCategory", "QBITTORRENT_CATEGORY", "bookarr"),
+      sabnzbdUrl: envOr(map, "sabnzbdUrl", "SABNZBD_URL"),
+      sabnzbdApiKey: envOr(map, "sabnzbdApiKey", "SABNZBD_API_KEY"),
+      sabnzbdCategory: envOr(map, "sabnzbdCategory", "SABNZBD_CATEGORY", "bookarr"),
     };
   }
 
   updateSettings(patch: Partial<AppSettings>): AppSettings {
     const current = this.getSettings();
-    const next = { ...current, ...patch };
+    const next: AppSettings = { ...current, ...patch };
     const set = this.db.prepare(
       `INSERT INTO settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     );
-    set.run("prowlarrUrl", next.prowlarrUrl);
-    set.run("prowlarrApiKey", next.prowlarrApiKey);
-    set.run("libraryRoot", next.libraryRoot);
-    set.run("qualityProfileId", String(next.qualityProfileId));
-    set.run("autoSearchOnApprove", String(next.autoSearchOnApprove));
+    const pairs: Array<[string, string]> = [
+      ["prowlarrUrl", next.prowlarrUrl],
+      ["prowlarrApiKey", next.prowlarrApiKey],
+      ["libraryRoot", next.libraryRoot],
+      ["qualityProfileId", String(next.qualityProfileId)],
+      ["autoSearchOnApprove", String(next.autoSearchOnApprove)],
+      ["downloadClientMode", next.downloadClientMode],
+      ["qbittorrentUrl", next.qbittorrentUrl],
+      ["qbittorrentUsername", next.qbittorrentUsername],
+      ["qbittorrentPassword", next.qbittorrentPassword],
+      ["qbittorrentCategory", next.qbittorrentCategory],
+      ["sabnzbdUrl", next.sabnzbdUrl],
+      ["sabnzbdApiKey", next.sabnzbdApiKey],
+      ["sabnzbdCategory", next.sabnzbdCategory],
+    ];
+    for (const [k, v] of pairs) set.run(k, v);
+
     this.prowlarr.updateConfig(next.prowlarrUrl, next.prowlarrApiKey);
+    this.clients.updateFromSettings(next);
     return this.getSettings();
+  }
+
+  publicSettings() {
+    const s = this.getSettings();
+    return {
+      ...s,
+      prowlarrApiKey: s.prowlarrApiKey ? "••••••••" : "",
+      prowlarrApiKeySet: Boolean(s.prowlarrApiKey),
+      qbittorrentPassword: s.qbittorrentPassword ? "••••••••" : "",
+      qbittorrentPasswordSet: Boolean(s.qbittorrentPassword),
+      sabnzbdApiKey: s.sabnzbdApiKey ? "••••••••" : "",
+      sabnzbdApiKeySet: Boolean(s.sabnzbdApiKey),
+    };
   }
 
   stats() {
@@ -408,11 +631,17 @@ export class LibraryService {
       c: number;
     };
     const downloads = this.db.prepare("SELECT COUNT(*) AS c FROM download_jobs").get() as { c: number };
+    const active = this.db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM download_jobs WHERE status IN ('queued', 'grabbed', 'downloading')`
+      )
+      .get() as { c: number };
     return {
       books: books.c,
       wanted: wanted.c,
       pendingRequests: pending.c,
       downloads: downloads.c,
+      activeDownloads: active.c,
     };
   }
 }
