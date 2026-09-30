@@ -1,6 +1,11 @@
+# Local development: build from source in this repo.
+# For production / no-clone deploys, use deploy/docker-compose.yml
+# which pulls ghcr.io/benjcrich/bookarr instead.
+
 services:
   bookarr:
     build: .
+    image: ghcr.io/benjcrich/bookarr:local
     ports:
       - "8787:8787"
     environment:
@@ -8,25 +13,21 @@ services:
       HOST: 0.0.0.0
       BOOKARR_DB_PATH: /data/bookarr.db
       BOOKARR_LIBRARY_ROOT: /data/audiobooks
-      PROWLARR_URL: ${PROWLARR_URL:-http://prowlarr:9696}
+      DOWNLOAD_CLIENT_MODE: ${DOWNLOAD_CLIENT_MODE:-mock}
+      METADATA_MODE: ${METADATA_MODE:-auto}
+      PROWLARR_URL: ${PROWLARR_URL:-}
       PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
+      QBITTORRENT_URL: ${QBITTORRENT_URL:-}
+      QBITTORRENT_USERNAME: ${QBITTORRENT_USERNAME:-admin}
+      QBITTORRENT_PASSWORD: ${QBITTORRENT_PASSWORD:-}
+      QBITTORRENT_CATEGORY: ${QBITTORRENT_CATEGORY:-bookarr}
+      SABNZBD_URL: ${SABNZBD_URL:-}
+      SABNZBD_API_KEY: ${SABNZBD_API_KEY:-}
+      SABNZBD_CATEGORY: ${SABNZBD_CATEGORY:-bookarr}
+      HARDCOVER_API_KEY: ${HARDCOVER_API_KEY:-}
     volumes:
       - bookarr-data:/data
     restart: unless-stopped
 
-  # Optional: uncomment and set PROWLARR_API_KEY after first Prowlarr setup.
-  # prowlarr:
-  #   image: lscr.io/linuxserver/prowlarr:latest
-  #   environment:
-  #     PUID: 1000
-  #     PGID: 1000
-  #     TZ: UTC
-  #   ports:
-  #     - "9696:9696"
-  #   volumes:
-  #     - prowlarr-config:/config
-  #   restart: unless-stopped
-
 volumes:
   bookarr-data:
-  # prowlarr-config:
