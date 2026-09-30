@@ -1,0 +1,32 @@
+services:
+  bookarr:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: 8787
+      HOST: 0.0.0.0
+      BOOKARR_DB_PATH: /data/bookarr.db
+      BOOKARR_LIBRARY_ROOT: /data/audiobooks
+      PROWLARR_URL: ${PROWLARR_URL:-http://prowlarr:9696}
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
+    volumes:
+      - bookarr-data:/data
+    restart: unless-stopped
+
+  # Optional: uncomment and set PROWLARR_API_KEY after first Prowlarr setup.
+  # prowlarr:
+  #   image: lscr.io/linuxserver/prowlarr:latest
+  #   environment:
+  #     PUID: 1000
+  #     PGID: 1000
+  #     TZ: UTC
+  #   ports:
+  #     - "9696:9696"
+  #   volumes:
+  #     - prowlarr-config:/config
+  #   restart: unless-stopped
+
+volumes:
+  bookarr-data:
+  # prowlarr-config:

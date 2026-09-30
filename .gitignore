@@ -1,0 +1,11 @@
+node_modules/
+dist/
+data/
+*.db
+*.db-*
+.env
+.DS_Store
+apps/api/data/
+apps/web/dist/
+coverage/
+*.log
