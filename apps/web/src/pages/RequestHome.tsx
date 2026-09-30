@@ -1,11 +1,18 @@
 import { useState, type FormEvent } from "react";
-import { bookarrApi, type Audiobook, type ProwlarrRelease } from "../api/client";
+import {
+  bookarrApi,
+  type Audiobook,
+  type MetadataResult,
+  type ProwlarrRelease,
+} from "../api/client";
 
 export function RequestHome() {
   const [q, setQ] = useState("");
   const [name, setName] = useState(() => localStorage.getItem("bookarr.requester") || "");
   const [libraryHits, setLibraryHits] = useState<Audiobook[]>([]);
+  const [metaHits, setMetaHits] = useState<MetadataResult[]>([]);
   const [releases, setReleases] = useState<ProwlarrRelease[]>([]);
+  const [selected, setSelected] = useState<MetadataResult | null>(null);
   const [title, setTitle] = useState("");
   const [authorName, setAuthorName] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -16,7 +23,11 @@ export function RequestHome() {
     setError(null);
     setMessage(null);
     try {
-      const [books, search] = await Promise.all([bookarrApi.books(), bookarrApi.search(q)]);
+      const [books, meta, search] = await Promise.all([
+        bookarrApi.books(),
+        bookarrApi.metadataSearch(q),
+        bookarrApi.search(q),
+      ]);
       const needle = q.toLowerCase();
       setLibraryHits(
         books.filter(
@@ -25,11 +36,18 @@ export function RequestHome() {
             (b.authorName ?? "").toLowerCase().includes(needle)
         )
       );
+      setMetaHits(meta.results);
       setReleases(search);
       if (!title) setTitle(q);
     } catch (err) {
       setError((err as Error).message);
     }
+  }
+
+  function useMeta(m: MetadataResult) {
+    setSelected(m);
+    setTitle(m.title);
+    setAuthorName(m.authorName);
   }
 
   async function submitRequest(e: FormEvent) {
@@ -43,12 +61,18 @@ export function RequestHome() {
     try {
       const req = await bookarrApi.createRequest({
         title: title.trim(),
-        authorName: authorName.trim() || "Unknown Author",
+        authorName: authorName.trim() || selected?.authorName || "Unknown Author",
+        overview: selected?.overview ?? null,
+        asin: selected?.asin ?? null,
+        isbn: selected?.isbn ?? null,
+        narrator: selected?.narrator ?? null,
+        coverUrl: selected?.coverUrl ?? null,
         requesterName: name.trim(),
       });
       setMessage(`Request #${req.id} submitted for “${req.title}”. An admin will review it.`);
       setTitle("");
       setAuthorName("");
+      setSelected(null);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -56,13 +80,14 @@ export function RequestHome() {
 
   function prefillFromRelease(r: ProwlarrRelease) {
     setTitle(r.title.replace(/\s*\[.*?\]\s*/g, " ").trim());
+    setSelected(null);
   }
 
   return (
     <>
       <h1 className="page-title">Request an audiobook</h1>
       <p className="page-lead">
-        Search the library and indexers, then send a request for admin approval.
+        Search metadata and the library, then send a request for admin approval.
       </p>
       {message && <p className="flash">{message}</p>}
       {error && <p className="flash error">{error}</p>}
@@ -85,7 +110,10 @@ export function RequestHome() {
               <h2>Already in library</h2>
             </div>
             {libraryHits.map((b) => (
-              <div className="row" key={b.id}>
+              <div className="row meta-row" key={b.id}>
+                <div className="meta-cover">
+                  {b.coverUrl ? <img src={b.coverUrl} alt="" loading="lazy" /> : <div className="meta-cover-empty" />}
+                </div>
                 <div>
                   <h3>{b.title}</h3>
                   <div className="meta">{b.authorName}</div>
@@ -94,6 +122,35 @@ export function RequestHome() {
                   <span className={`badge ${b.status}`}>{b.status}</span>
                 </div>
                 <div className="meta">No need to request</div>
+              </div>
+            ))}
+          </>
+        )}
+        {metaHits.length > 0 && (
+          <>
+            <div className="panel-head">
+              <h2>Metadata matches</h2>
+            </div>
+            {metaHits.map((m) => (
+              <div className="row meta-row" key={`${m.provider}-${m.providerId}`}>
+                <div className="meta-cover">
+                  {m.coverUrl ? <img src={m.coverUrl} alt="" loading="lazy" /> : <div className="meta-cover-empty" />}
+                </div>
+                <div>
+                  <h3>{m.title}</h3>
+                  <div className="meta">
+                    {m.authorName}
+                    {m.isbn ? ` · ISBN ${m.isbn}` : ""}
+                  </div>
+                </div>
+                <div>
+                  <span className="badge">{m.provider}</span>
+                </div>
+                <div className="actions">
+                  <button className="btn primary" type="button" onClick={() => useMeta(m)}>
+                    Request this
+                  </button>
+                </div>
               </div>
             ))}
           </>
@@ -128,6 +185,7 @@ export function RequestHome() {
       <div className="panel">
         <div className="panel-head">
           <h2>Submit request</h2>
+          {selected && <span className="meta">Using {selected.provider} metadata</span>}
         </div>
         <form className="form-grid two" onSubmit={submitRequest}>
           <label>
@@ -136,7 +194,11 @@ export function RequestHome() {
           </label>
           <label>
             Author
-            <input value={authorName} onChange={(e) => setAuthorName(e.target.value)} placeholder="Optional" />
+            <input
+              value={authorName}
+              onChange={(e) => setAuthorName(e.target.value)}
+              placeholder="Optional"
+            />
           </label>
           <label style={{ gridColumn: "1 / -1" }}>
             Title

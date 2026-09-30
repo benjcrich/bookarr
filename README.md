@@ -6,7 +6,7 @@ Radarr/Sonarr-style **audiobook** automation: track wanted titles, search/grab v
 
 | Piece | Stack | Role |
 |-------|--------|------|
-| `apps/api` | TypeScript, Fastify, SQLite | Domain, REST, Prowlarr + download clients |
+| `apps/api` | TypeScript, Fastify, SQLite | Domain, REST, Prowlarr, download clients, metadata |
 | `apps/web` | React, Vite, React Router | Admin UI (`/admin`) + Request UI (`/request`) |
 | Compose | Node image | Single process serves API + built SPA |
 
@@ -14,14 +14,14 @@ Radarr/Sonarr-style **audiobook** automation: track wanted titles, search/grab v
 Request UI ──┐
              ├──► Bookarr API ──► Prowlarr (indexers)
 Admin UI ────┘         │
-                       ├──► qBittorrent / SABnzbd / mock
-                       ├──► poll progress → import hook → library root
+                       ├──► qBittorrent / SABnzbd / mock → import
+                       ├──► Open Library / Hardcover / mock metadata
                        └── SQLite
 ```
 
-**Done:** library/wanted/monitored, request approve→library, Prowlarr search/grab, **download-client adapters (qBit + SAB + mock)**, poll + import stub, admin/request UIs, docker-compose.
+**Done:** library/wanted/monitored, request approve→library, Prowlarr search/grab, download clients (qBit/SAB/mock), **metadata providers (Open Library + optional Hardcover + mock/cache)**, admin/request UIs, docker-compose.
 
-**Next:** richer rename/metadata, auth roles, quality cutoffs, notifications. See product plan in Context store `docs/audiobook-arr-plan.md`.
+**Next:** richer rename/tagging, auth roles, quality cutoffs, notifications. See product plan in Context store `docs/audiobook-arr-plan.md`.
 
 ## Quick start (local)
 
@@ -50,6 +50,15 @@ docker compose up --build
 
 Open http://localhost:8787. With `DOWNLOAD_CLIENT_MODE=mock` (default), grab → mock download → import works without live clients.
 
+## Metadata providers
+
+- **Open Library** — used when `METADATA_MODE=auto` (no API key)
+- **Hardcover** — optional when `HARDCOVER_API_KEY` is set
+- **Mock** — `METADATA_MODE=mock`, or automatic fallback if live providers fail
+- Results cached in SQLite (`METADATA_CACHE_TTL_HOURS`, default 24)
+
+Admin → Library and Request UI both search metadata; **Enrich** backfills covers/ISBN/overview on existing books. Audible is not scraped (fragile); ASIN is filled when providers expose it.
+
 ## Configuring download clients
 
 1. Set `DOWNLOAD_CLIENT_MODE=auto` (or Admin → Settings → Client mode = auto).
@@ -75,6 +84,9 @@ On completion Bookarr runs an import hook under `BOOKARR_LIBRARY_ROOT` as `Autho
 | `DOWNLOAD_CLIENT_MODE` | `mock` | `mock` or `auto` |
 | `QBITTORRENT_*` | _(empty)_ | URL, user, password, category |
 | `SABNZBD_*` | _(empty)_ | URL, API key, category |
+| `METADATA_MODE` | `auto` | `auto` or `mock` |
+| `HARDCOVER_API_KEY` | _(empty)_ | Optional Hardcover token |
+| `METADATA_CACHE_TTL_HOURS` | `24` | Metadata cache TTL |
 
 Settings can also be edited in **Admin → Settings** (env wins on boot when set).
 
@@ -84,6 +96,7 @@ Settings can also be edited in **Admin → Settings** (env wins on boot when set
 - `GET/POST /api/books`, requests, search, grab
 - `GET /api/downloads`, `POST /api/downloads/poll`
 - `GET /api/download-clients`
+- `GET /api/metadata/search?q=`, `POST /api/books/:id/enrich`
 - `GET/PUT /api/settings`
 
 ## Request → library flow

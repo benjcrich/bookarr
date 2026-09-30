@@ -23,7 +23,10 @@ export interface Audiobook {
   authorName?: string;
   overview: string | null;
   asin: string | null;
+  isbn: string | null;
   narrator: string | null;
+  coverUrl: string | null;
+  runtimeMinutes: number | null;
   monitored: boolean;
   wanted: boolean;
   status: BookStatus;
@@ -31,6 +34,22 @@ export interface Audiobook {
   path: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type MetadataProvider = "openlibrary" | "hardcover" | "mock";
+
+export interface MetadataResult {
+  provider: MetadataProvider;
+  providerId: string;
+  title: string;
+  authorName: string;
+  overview: string | null;
+  coverUrl: string | null;
+  narrator: string | null;
+  runtimeMinutes: number | null;
+  asin: string | null;
+  isbn: string | null;
+  publishedYear: number | null;
 }
 
 export interface QualityProfile {
@@ -46,7 +65,9 @@ export interface BookRequest {
   authorName: string;
   overview: string | null;
   asin: string | null;
+  isbn: string | null;
   narrator: string | null;
+  coverUrl: string | null;
   requesterName: string;
   status: RequestStatus;
   audiobookId: number | null;
@@ -91,6 +112,10 @@ export interface AppSettings {
   sabnzbdUrl: string;
   sabnzbdApiKey: string;
   sabnzbdCategory: string;
+  /** mock = canned results; auto = Open Library (+ Hardcover if keyed) */
+  metadataMode: "mock" | "auto";
+  hardcoverApiKey: string;
+  metadataCacheTtlHours: number;
 }
 
 export interface ProwlarrIndexer {

@@ -251,6 +251,49 @@ textarea {
   grid-template-columns: 1.6fr 0.8fr auto;
 }
 
+.meta-row {
+  grid-template-columns: 56px 1.4fr auto auto;
+  align-items: start;
+}
+
+.meta-cover {
+  width: 48px;
+  height: 72px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(15, 11, 9, 0.55);
+  border: 1px solid var(--line);
+}
+
+.meta-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.meta-cover-empty {
+  width: 100%;
+  height: 100%;
+  background:
+    linear-gradient(145deg, rgba(217, 119, 42, 0.25), transparent 60%),
+    rgba(243, 232, 216, 0.04);
+}
+
+.overview-clip {
+  margin-top: 0.35rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .meta-row {
+    grid-template-columns: 48px 1fr;
+  }
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

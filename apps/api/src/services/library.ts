@@ -10,6 +10,7 @@ import type {
 } from "../domain/types.js";
 import type { DownloadClientRegistry } from "./download-clients/index.js";
 import { importCompletedDownload } from "./importer.js";
+import type { MetadataService } from "./metadata/index.js";
 import type { ProwlarrClient } from "./prowlarr.js";
 
 function mapAuthor(row: Record<string, unknown>): Author {
@@ -29,7 +30,10 @@ function mapBook(row: Record<string, unknown>): Audiobook {
     authorName: row.author_name != null ? String(row.author_name) : undefined,
     overview: row.overview != null ? String(row.overview) : null,
     asin: row.asin != null ? String(row.asin) : null,
+    isbn: row.isbn != null ? String(row.isbn) : null,
     narrator: row.narrator != null ? String(row.narrator) : null,
+    coverUrl: row.cover_url != null ? String(row.cover_url) : null,
+    runtimeMinutes: row.runtime_minutes != null ? Number(row.runtime_minutes) : null,
     monitored: Boolean(row.monitored),
     wanted: Boolean(row.wanted),
     status: row.status as Audiobook["status"],
@@ -47,7 +51,9 @@ function mapRequest(row: Record<string, unknown>): BookRequest {
     authorName: String(row.author_name),
     overview: row.overview != null ? String(row.overview) : null,
     asin: row.asin != null ? String(row.asin) : null,
+    isbn: row.isbn != null ? String(row.isbn) : null,
     narrator: row.narrator != null ? String(row.narrator) : null,
+    coverUrl: row.cover_url != null ? String(row.cover_url) : null,
     requesterName: String(row.requester_name),
     status: row.status as RequestStatus,
     audiobookId: row.audiobook_id != null ? Number(row.audiobook_id) : null,
@@ -87,11 +93,17 @@ function envOr(map: Record<string, string>, key: string, envName: string, fallba
 }
 
 export class LibraryService {
+  private metadata: MetadataService | null = null;
+
   constructor(
     private db: Database.Database,
     private prowlarr: ProwlarrClient,
     private clients: DownloadClientRegistry
   ) {}
+
+  setMetadataService(metadata: MetadataService): void {
+    this.metadata = metadata;
+  }
 
   listAuthors(): Author[] {
     return this.db
@@ -149,7 +161,10 @@ export class LibraryService {
     authorName: string;
     overview?: string | null;
     asin?: string | null;
+    isbn?: string | null;
     narrator?: string | null;
+    coverUrl?: string | null;
+    runtimeMinutes?: number | null;
     monitored?: boolean;
     wanted?: boolean;
     status?: Audiobook["status"];
@@ -169,7 +184,10 @@ export class LibraryService {
           `UPDATE audiobooks SET
             overview = COALESCE(?, overview),
             asin = COALESCE(?, asin),
+            isbn = COALESCE(?, isbn),
             narrator = COALESCE(?, narrator),
+            cover_url = COALESCE(?, cover_url),
+            runtime_minutes = COALESCE(?, runtime_minutes),
             monitored = ?,
             wanted = ?,
             status = COALESCE(?, status),
@@ -180,7 +198,10 @@ export class LibraryService {
         .run(
           input.overview ?? null,
           input.asin ?? null,
+          input.isbn ?? null,
           input.narrator ?? null,
+          input.coverUrl ?? null,
+          input.runtimeMinutes ?? null,
           input.monitored === false ? 0 : 1,
           input.wanted === false ? 0 : 1,
           input.status ?? null,
@@ -193,21 +214,62 @@ export class LibraryService {
     const info = this.db
       .prepare(
         `INSERT INTO audiobooks
-          (title, author_id, overview, asin, narrator, monitored, wanted, status, quality_profile_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (title, author_id, overview, asin, isbn, narrator, cover_url, runtime_minutes,
+           monitored, wanted, status, quality_profile_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         input.title.trim(),
         author.id,
         input.overview ?? null,
         input.asin ?? null,
+        input.isbn ?? null,
         input.narrator ?? null,
+        input.coverUrl ?? null,
+        input.runtimeMinutes ?? null,
         input.monitored === false ? 0 : 1,
         input.wanted === false ? 0 : 1,
         input.status ?? "wanted",
         qp
       );
     return this.getBook(Number(info.lastInsertRowid))!;
+  }
+
+  applyMetadata(
+    id: number,
+    meta: {
+      overview?: string | null;
+      asin?: string | null;
+      isbn?: string | null;
+      narrator?: string | null;
+      coverUrl?: string | null;
+      runtimeMinutes?: number | null;
+    }
+  ): Audiobook | null {
+    const book = this.getBook(id);
+    if (!book) return null;
+    this.db
+      .prepare(
+        `UPDATE audiobooks SET
+          overview = COALESCE(?, overview),
+          asin = COALESCE(?, asin),
+          isbn = COALESCE(?, isbn),
+          narrator = COALESCE(?, narrator),
+          cover_url = COALESCE(?, cover_url),
+          runtime_minutes = COALESCE(?, runtime_minutes),
+          updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(
+        meta.overview ?? null,
+        meta.asin ?? null,
+        meta.isbn ?? null,
+        meta.narrator ?? null,
+        meta.coverUrl ?? null,
+        meta.runtimeMinutes ?? null,
+        id
+      );
+    return this.getBook(id);
   }
 
   updateBookFlags(
@@ -269,20 +331,25 @@ export class LibraryService {
     authorName: string;
     overview?: string | null;
     asin?: string | null;
+    isbn?: string | null;
     narrator?: string | null;
+    coverUrl?: string | null;
     requesterName: string;
   }): BookRequest {
     const info = this.db
       .prepare(
-        `INSERT INTO requests (title, author_name, overview, asin, narrator, requester_name)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO requests
+          (title, author_name, overview, asin, isbn, narrator, cover_url, requester_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         input.title.trim(),
         input.authorName.trim(),
         input.overview ?? null,
         input.asin ?? null,
+        input.isbn ?? null,
         input.narrator ?? null,
+        input.coverUrl ?? null,
         input.requesterName.trim() || "anonymous"
       );
     return mapRequest(
@@ -301,7 +368,9 @@ export class LibraryService {
       authorName: req.authorName,
       overview: req.overview,
       asin: req.asin,
+      isbn: req.isbn,
       narrator: req.narrator,
+      coverUrl: req.coverUrl,
       monitored: true,
       wanted: true,
       status: "wanted",
@@ -579,6 +648,11 @@ export class LibraryService {
       sabnzbdUrl: envOr(map, "sabnzbdUrl", "SABNZBD_URL"),
       sabnzbdApiKey: envOr(map, "sabnzbdApiKey", "SABNZBD_API_KEY"),
       sabnzbdCategory: envOr(map, "sabnzbdCategory", "SABNZBD_CATEGORY", "bookarr"),
+      metadataMode: envOr(map, "metadataMode", "METADATA_MODE", "auto") === "mock" ? "mock" : "auto",
+      hardcoverApiKey: envOr(map, "hardcoverApiKey", "HARDCOVER_API_KEY"),
+      metadataCacheTtlHours: Number(
+        envOr(map, "metadataCacheTtlHours", "METADATA_CACHE_TTL_HOURS", "24") || 24
+      ),
     };
   }
 
@@ -603,11 +677,15 @@ export class LibraryService {
       ["sabnzbdUrl", next.sabnzbdUrl],
       ["sabnzbdApiKey", next.sabnzbdApiKey],
       ["sabnzbdCategory", next.sabnzbdCategory],
+      ["metadataMode", next.metadataMode],
+      ["hardcoverApiKey", next.hardcoverApiKey],
+      ["metadataCacheTtlHours", String(next.metadataCacheTtlHours)],
     ];
     for (const [k, v] of pairs) set.run(k, v);
 
     this.prowlarr.updateConfig(next.prowlarrUrl, next.prowlarrApiKey);
     this.clients.updateFromSettings(next);
+    this.metadata?.updateFromSettings(next);
     return this.getSettings();
   }
 
@@ -621,6 +699,8 @@ export class LibraryService {
       qbittorrentPasswordSet: Boolean(s.qbittorrentPassword),
       sabnzbdApiKey: s.sabnzbdApiKey ? "••••••••" : "",
       sabnzbdApiKeySet: Boolean(s.sabnzbdApiKey),
+      hardcoverApiKey: s.hardcoverApiKey ? "••••••••" : "",
+      hardcoverApiKeySet: Boolean(s.hardcoverApiKey),
     };
   }
 
