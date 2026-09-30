@@ -1,0 +1,21 @@
+{
+  "name": "bookarr",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Radarr/Sonarr-style audiobook automation with Prowlarr and Overseerr-style requests",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @bookarr/api & npm run dev -w @bookarr/web",
+    "dev:api": "npm run dev -w @bookarr/api",
+    "dev:web": "npm run dev -w @bookarr/web",
+    "build": "npm run build -w @bookarr/api && npm run build -w @bookarr/web",
+    "start": "npm run start -w @bookarr/api",
+    "typecheck": "npm run typecheck -w @bookarr/api && npm run typecheck -w @bookarr/web"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
