@@ -24,6 +24,8 @@ export function defaultSettings(overrides: Partial<AppSettings> = {}): AppSettin
     downloadPollMs: 3000,
     mockDownloadMs: 1500,
     logLevel: "info",
+    downloadRetryMaxAttempts: 5,
+    downloadRetryBaseDelayMs: 10_000,
     ...overrides,
   };
 }

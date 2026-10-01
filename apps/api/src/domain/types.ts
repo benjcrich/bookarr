@@ -93,6 +93,10 @@ export interface DownloadJob {
   progress: number;
   outputPath: string | null;
   importPath: string | null;
+  /** Tries so far (1 on first enqueue; increments on each retry) */
+  attempts: number;
+  /** ISO timestamp when auto-retry is due; null if not scheduled */
+  nextRetryAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -138,6 +142,10 @@ export interface AppSettings {
   mockDownloadMs: number;
   /** Application log level (also bootstrapped from LOG_LEVEL env) */
   logLevel: "debug" | "info" | "warn" | "error";
+  /** Max download/import attempts before giving up (includes first try) */
+  downloadRetryMaxAttempts: number;
+  /** Base backoff delay for auto-retries (ms); doubles each attempt, capped */
+  downloadRetryBaseDelayMs: number;
 }
 
 /** Parse comma/space/JSON list of positive ints from settings/env/UI. */

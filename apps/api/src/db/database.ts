@@ -78,6 +78,8 @@ function migrate(db: Database.Database): void {
       progress REAL NOT NULL DEFAULT 0,
       output_path TEXT,
       import_path TEXT,
+      attempts INTEGER NOT NULL DEFAULT 1,
+      next_retry_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -107,6 +109,8 @@ function migrate(db: Database.Database): void {
   addJob("progress", "progress REAL NOT NULL DEFAULT 0");
   addJob("output_path", "output_path TEXT");
   addJob("import_path", "import_path TEXT");
+  addJob("attempts", "attempts INTEGER NOT NULL DEFAULT 1");
+  addJob("next_retry_at", "next_retry_at TEXT");
 
   const bookCols = new Set(
     (db.prepare("PRAGMA table_info(audiobooks)").all() as Array<{ name: string }>).map((c) => c.name)

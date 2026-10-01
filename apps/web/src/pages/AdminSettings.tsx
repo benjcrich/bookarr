@@ -129,6 +129,8 @@ export function AdminSettings() {
         downloadPollMs: form.downloadPollMs,
         mockDownloadMs: form.mockDownloadMs,
         logLevel: form.logLevel,
+        downloadRetryMaxAttempts: form.downloadRetryMaxAttempts,
+        downloadRetryBaseDelayMs: form.downloadRetryBaseDelayMs,
       };
       if (form.prowlarrApiKey?.trim()) body.prowlarrApiKey = form.prowlarrApiKey.trim();
       if (form.qbittorrentPassword?.trim()) body.qbittorrentPassword = form.qbittorrentPassword.trim();
@@ -513,6 +515,26 @@ export function AdminSettings() {
                 <option value="warn">warn</option>
                 <option value="error">error</option>
               </select>
+            </label>
+            <label>
+              Download retry max attempts
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={form.downloadRetryMaxAttempts ?? 5}
+                onChange={(e) => set("downloadRetryMaxAttempts", Number(e.target.value))}
+              />
+            </label>
+            <label>
+              Retry base delay (ms)
+              <input
+                type="number"
+                min={100}
+                step={100}
+                value={form.downloadRetryBaseDelayMs ?? 10000}
+                onChange={(e) => set("downloadRetryBaseDelayMs", Number(e.target.value))}
+              />
             </label>
           </div>
           <div className="form-grid" style={{ paddingTop: 0 }}>

@@ -80,6 +80,8 @@ export interface DownloadJob {
   outputPath: string | null;
   importPath: string | null;
   error: string | null;
+  attempts: number;
+  nextRetryAt: string | null;
   createdAt: string;
 }
 
@@ -119,6 +121,8 @@ export interface PublicSettings {
   downloadPollMs: number;
   mockDownloadMs: number;
   logLevel: "debug" | "info" | "warn" | "error";
+  downloadRetryMaxAttempts: number;
+  downloadRetryBaseDelayMs: number;
   precedence?: string;
   note?: string;
 }
@@ -211,6 +215,11 @@ export const bookarrApi = {
   downloads: () => api<DownloadJob[]>("/api/downloads"),
   pollDownloads: () =>
     api<{ polled: number; jobs: DownloadJob[] }>("/api/downloads/poll", {
+      method: "POST",
+      body: "{}",
+    }),
+  retryDownload: (id: number) =>
+    api<{ job: DownloadJob; retried: boolean }>(`/api/downloads/${id}/retry`, {
       method: "POST",
       body: "{}",
     }),
