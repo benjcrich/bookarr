@@ -84,9 +84,31 @@ function mapJob(row: Record<string, unknown>): DownloadJob {
     progress: Number(row.progress ?? 0),
     outputPath: row.output_path != null ? String(row.output_path) : null,
     importPath: row.import_path != null ? String(row.import_path) : null,
+    attempts: Number(row.attempts ?? 1),
+    nextRetryAt: row.next_retry_at != null ? String(row.next_retry_at) : null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+/** Transient failures we auto-retry; permanent/missing-payload errors we do not. */
+export function isRetryableDownloadError(error: string | null | undefined, job: DownloadJob): boolean {
+  const msg = (error ?? "").toLowerCase();
+  if (!msg) return true;
+  // Nothing to re-send and nothing to re-import
+  if (!job.downloadUrl && !job.outputPath) return false;
+  if (/\b(404|not found|gone|invalid guid|unsupported protocol)\b/.test(msg)) return false;
+  // Explicitly retry permission / client / network / import issues
+  if (/\b(eacces|eperm|permission denied|econnrefused|etimedout|enotfound|socket|timeout|unavailable|ehostunreach|library path|import)\b/.test(msg)) {
+    return true;
+  }
+  // Default: retry (client briefly down, mock glitches, etc.)
+  return true;
+}
+
+function retryBackoffMs(baseMs: number, attempts: number): number {
+  const exp = Math.max(0, attempts - 1);
+  return Math.min(baseMs * 2 ** exp, 5 * 60_000);
 }
 
 /**
@@ -451,6 +473,8 @@ export class LibraryService {
       hardcoverApiKeySet: Boolean(s.hardcoverApiKey),
       downloadPollMs: s.downloadPollMs,
       logLevel: s.logLevel,
+      downloadRetryMaxAttempts: s.downloadRetryMaxAttempts,
+      downloadRetryBaseDelayMs: s.downloadRetryBaseDelayMs,
     };
   }
 
@@ -491,8 +515,8 @@ export class LibraryService {
     const info = this.db
       .prepare(
         `INSERT INTO download_jobs
-          (audiobook_id, title, indexer_id, indexer_name, guid, download_url, status, protocol, size, progress)
-         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, 0)`
+          (audiobook_id, title, indexer_id, indexer_name, guid, download_url, status, protocol, size, progress, attempts)
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, 0, 1)`
       )
       .run(
         input.audiobookId ?? null,
@@ -518,22 +542,48 @@ export class LibraryService {
       }
     }
 
-    const client = this.clients.forProtocol(input.release.protocol, settings.downloadClientMode);
-    log.info("download.enqueue", {
-      jobId,
+    await this.sendJobToClient(jobId, {
       title: input.release.title,
       protocol: input.release.protocol,
-      client: client.kind,
-      indexer: input.release.indexer,
+      downloadUrl: input.release.downloadUrl ?? downloadUrl ?? undefined,
+      magnetUrl: input.release.magnetUrl,
+      size: input.release.size,
       audiobookId: input.audiobookId ?? null,
+      indexer: input.release.indexer,
+    });
+
+    return this.getDownload(jobId)!;
+  }
+
+  private async sendJobToClient(
+    jobId: number,
+    meta: {
+      title: string;
+      protocol: string;
+      downloadUrl?: string | null;
+      magnetUrl?: string;
+      size?: number | null;
+      audiobookId?: number | null;
+      indexer?: string | null;
+    }
+  ): Promise<void> {
+    const settings = this.getSettings();
+    const client = this.clients.forProtocol(meta.protocol, settings.downloadClientMode);
+    log.info("download.enqueue", {
+      jobId,
+      title: meta.title,
+      protocol: meta.protocol,
+      client: client.kind,
+      indexer: meta.indexer ?? null,
+      audiobookId: meta.audiobookId ?? null,
     });
     const added = await client.add({
-      title: input.release.title,
-      downloadUrl: input.release.downloadUrl,
-      magnetUrl: input.release.magnetUrl,
+      title: meta.title,
+      downloadUrl: meta.downloadUrl ?? undefined,
+      magnetUrl: meta.magnetUrl,
       category:
         client.protocol === "usenet" ? settings.sabnzbdCategory : settings.qbittorrentCategory,
-      size: input.release.size,
+      size: meta.size ?? undefined,
     });
 
     if (!added.accepted) {
@@ -542,14 +592,8 @@ export class LibraryService {
         client: client.kind,
         detail: added.detail,
       });
-      this.db
-        .prepare(
-          `UPDATE download_jobs SET
-            status = 'failed', client = ?, error = ?, updated_at = datetime('now')
-           WHERE id = ?`
-        )
-        .run(client.kind, added.detail, jobId);
-      return this.getDownload(jobId)!;
+      this.markJobFailed(jobId, added.detail, { client: client.kind });
+      return;
     }
 
     this.db
@@ -560,6 +604,7 @@ export class LibraryService {
           external_id = ?,
           progress = 0,
           error = NULL,
+          next_retry_at = NULL,
           updated_at = datetime('now')
          WHERE id = ?`
       )
@@ -571,15 +616,179 @@ export class LibraryService {
       externalId: added.externalId,
     });
 
-    if (input.audiobookId) {
-      this.updateBookFlags(input.audiobookId, { status: "downloading", wanted: true, monitored: true });
+    if (meta.audiobookId) {
+      this.updateBookFlags(meta.audiobookId, { status: "downloading", wanted: true, monitored: true });
+    }
+  }
+
+  /**
+   * Mark a job failed; schedule auto-retry with backoff when the error looks transient
+   * and attempts remain under the configured max.
+   */
+  markJobFailed(
+    jobId: number,
+    error: string,
+    extras?: { progress?: number; outputPath?: string | null; client?: string | null }
+  ): DownloadJob {
+    const job = this.getDownload(jobId);
+    if (!job) throw new Error(`Job ${jobId} not found`);
+    const settings = this.getSettings();
+    const retryable = isRetryableDownloadError(error, job);
+    const canAuto = retryable && job.attempts < settings.downloadRetryMaxAttempts;
+    let nextRetryAt: string | null = null;
+    if (canAuto) {
+      const delay = retryBackoffMs(settings.downloadRetryBaseDelayMs, job.attempts);
+      nextRetryAt = new Date(Date.now() + delay).toISOString();
+      log.info("download.retry.scheduled", {
+        jobId,
+        attempt: job.attempts,
+        max: settings.downloadRetryMaxAttempts,
+        delayMs: delay,
+        reason: error.slice(0, 240),
+      });
+    } else {
+      log.warn("download.failed.final", {
+        jobId,
+        attempt: job.attempts,
+        max: settings.downloadRetryMaxAttempts,
+        retryable,
+        reason: error.slice(0, 240),
+      });
     }
 
+    this.db
+      .prepare(
+        `UPDATE download_jobs SET
+          status = 'failed',
+          error = ?,
+          progress = COALESCE(?, progress),
+          output_path = COALESCE(?, output_path),
+          client = COALESCE(?, client),
+          next_retry_at = ?,
+          updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(
+        error,
+        extras?.progress ?? null,
+        extras?.outputPath !== undefined ? extras.outputPath : null,
+        extras?.client ?? null,
+        nextRetryAt,
+        jobId
+      );
     return this.getDownload(jobId)!;
   }
 
-  /** Poll active jobs against download clients; import when complete. */
+  /** Manual or scheduled retry of a failed job. */
+  async retryDownload(id: number, opts?: { manual?: boolean }): Promise<DownloadJob | null> {
+    const job = this.getDownload(id);
+    if (!job) return null;
+    if (job.status !== "failed") return job;
+
+    const settings = this.getSettings();
+    const manual = Boolean(opts?.manual);
+    if (!manual && job.attempts >= settings.downloadRetryMaxAttempts) {
+      log.warn("download.retry.skipped", {
+        jobId: id,
+        attempt: job.attempts,
+        max: settings.downloadRetryMaxAttempts,
+        reason: "max attempts reached",
+      });
+      return job;
+    }
+    if (!manual && !isRetryableDownloadError(job.error, job)) {
+      log.warn("download.retry.skipped", {
+        jobId: id,
+        reason: "non-retryable error",
+        error: job.error,
+      });
+      return job;
+    }
+
+    const nextAttempt = job.attempts + 1;
+    log.info("download.retry", {
+      jobId: id,
+      attempt: nextAttempt,
+      max: settings.downloadRetryMaxAttempts,
+      reason: (job.error ?? "unknown").slice(0, 240),
+      manual,
+    });
+
+    // Import-only retry when we already have an output path (e.g. EACCES on library mkdir)
+    const importish =
+      Boolean(job.outputPath) &&
+      /\b(eacces|eperm|permission denied|library path|import|could not create)\b/i.test(
+        job.error ?? ""
+      );
+
+    if (importish && job.outputPath) {
+      this.db
+        .prepare(
+          `UPDATE download_jobs SET
+            attempts = ?, next_retry_at = NULL, error = NULL, updated_at = datetime('now')
+           WHERE id = ?`
+        )
+        .run(nextAttempt, id);
+      await this.completeAndImport(this.getDownload(id)!, job.outputPath, job.progress || 100);
+      return this.getDownload(id)!;
+    }
+
+    if (!job.downloadUrl) {
+      this.markJobFailed(id, job.error || "Cannot retry: no download URL or importable output path");
+      // Clear next_retry if permanent
+      this.db
+        .prepare(
+          `UPDATE download_jobs SET next_retry_at = NULL, attempts = ?, updated_at = datetime('now') WHERE id = ?`
+        )
+        .run(nextAttempt, id);
+      return this.getDownload(id)!;
+    }
+
+    this.db
+      .prepare(
+        `UPDATE download_jobs SET
+          attempts = ?,
+          next_retry_at = NULL,
+          status = 'queued',
+          error = NULL,
+          external_id = NULL,
+          progress = 0,
+          updated_at = datetime('now')
+         WHERE id = ?`
+      )
+      .run(nextAttempt, id);
+
+    await this.sendJobToClient(id, {
+      title: job.title,
+      protocol: job.protocol,
+      downloadUrl: job.downloadUrl,
+      size: job.size,
+      audiobookId: job.audiobookId,
+      indexer: job.indexerName,
+    });
+    return this.getDownload(id)!;
+  }
+
+  /** Poll active jobs against download clients; import when complete; run due retries. */
   async pollDownloads(): Promise<DownloadJob[]> {
+    const updated: DownloadJob[] = [];
+
+    // Auto-retries that are due
+    const due = this.db
+      .prepare(
+        `SELECT id FROM download_jobs
+         WHERE status = 'failed'
+           AND next_retry_at IS NOT NULL
+           AND datetime(next_retry_at) <= datetime('now')
+         ORDER BY id ASC
+         LIMIT 20`
+      )
+      .all() as Array<{ id: number }>;
+    for (const row of due) {
+      const retried = await this.retryDownload(row.id, { manual: false });
+      if (retried) updated.push(retried);
+    }
+
     const active = this.db
       .prepare(
         `SELECT * FROM download_jobs
@@ -590,7 +799,6 @@ export class LibraryService {
       .map((r) => mapJob(r as Record<string, unknown>));
 
     const settings = this.getSettings();
-    const updated: DownloadJob[] = [];
     if (active.length > 0) {
       log.debug("download.poll", { active: active.length });
     }
@@ -615,6 +823,7 @@ export class LibraryService {
           client: job.client,
           error: (err as Error).message,
         });
+        // Keep downloading; surface error but don't fail the job yet (transient)
         this.db
           .prepare(
             `UPDATE download_jobs SET error = ?, updated_at = datetime('now') WHERE id = ?`
@@ -625,19 +834,13 @@ export class LibraryService {
       }
 
       if (remote.state === "failed") {
-        log.warn("download.failed", {
-          jobId: job.id,
-          client: job.client,
-          error: remote.error ?? "Download failed",
-        });
-        this.db
-          .prepare(
-            `UPDATE download_jobs SET
-              status = 'failed', progress = ?, output_path = ?, error = ?, updated_at = datetime('now')
-             WHERE id = ?`
-          )
-          .run(remote.progress, remote.outputPath, remote.error ?? "Download failed", job.id);
-        updated.push(this.getDownload(job.id)!);
+        updated.push(
+          this.markJobFailed(job.id, remote.error ?? "Download failed", {
+            progress: remote.progress,
+            outputPath: remote.outputPath,
+            client: job.client,
+          })
+        );
         continue;
       }
 
@@ -651,6 +854,7 @@ export class LibraryService {
         .prepare(
           `UPDATE download_jobs SET
             status = 'downloading', progress = ?, output_path = COALESCE(?, output_path),
+            error = NULL,
             updated_at = datetime('now')
            WHERE id = ?`
         )
@@ -694,20 +898,21 @@ export class LibraryService {
       detail: imported.detail,
     });
 
+    if (!imported.ok) {
+      this.markJobFailed(job.id, imported.detail, { outputPath, progress: progress || 100 });
+      return;
+    }
+
     this.db
       .prepare(
         `UPDATE download_jobs SET
-          status = ?, import_path = ?, error = ?, updated_at = datetime('now')
+          status = 'imported', import_path = ?, error = ?, next_retry_at = NULL,
+          updated_at = datetime('now')
          WHERE id = ?`
       )
-      .run(
-        imported.ok ? "imported" : "failed",
-        imported.importPath,
-        imported.ok ? (imported.stub ? imported.detail : null) : imported.detail,
-        job.id
-      );
+      .run(imported.importPath, imported.stub ? imported.detail : null, job.id);
 
-    if (imported.ok && job.audiobookId) {
+    if (job.audiobookId) {
       this.updateBookFlags(job.audiobookId, {
         status: "available",
         wanted: false,
@@ -743,6 +948,8 @@ export class LibraryService {
       ["downloadPollMs", process.env.BOOKARR_DOWNLOAD_POLL_MS],
       ["mockDownloadMs", process.env.BOOKARR_MOCK_DOWNLOAD_MS],
       ["logLevel", process.env.LOG_LEVEL],
+      ["downloadRetryMaxAttempts", process.env.BOOKARR_DOWNLOAD_RETRY_MAX],
+      ["downloadRetryBaseDelayMs", process.env.BOOKARR_DOWNLOAD_RETRY_BASE_MS],
     ];
     for (const [key, value] of pairs) {
       if (value != null && String(value).trim() !== "") insert.run(key, String(value));
@@ -762,6 +969,8 @@ export class LibraryService {
     insert.run("prowlarrIndexerIds", "");
     insert.run("prowlarrCategories", "");
     insert.run("logLevel", "info");
+    insert.run("downloadRetryMaxAttempts", "5");
+    insert.run("downloadRetryBaseDelayMs", "10000");
   }
 
   getSettings(): AppSettings {
@@ -797,6 +1006,12 @@ export class LibraryService {
       downloadPollMs: Number(setting(map, "downloadPollMs", "BOOKARR_DOWNLOAD_POLL_MS", "3000") || 3000),
       mockDownloadMs: Number(setting(map, "mockDownloadMs", "BOOKARR_MOCK_DOWNLOAD_MS", "1500") || 1500),
       logLevel: parseLogLevel(setting(map, "logLevel", "LOG_LEVEL", "info"), "info"),
+      downloadRetryMaxAttempts: Number(
+        setting(map, "downloadRetryMaxAttempts", "BOOKARR_DOWNLOAD_RETRY_MAX", "5") || 5
+      ),
+      downloadRetryBaseDelayMs: Number(
+        setting(map, "downloadRetryBaseDelayMs", "BOOKARR_DOWNLOAD_RETRY_BASE_MS", "10000") || 10000
+      ),
     };
   }
 
@@ -835,6 +1050,8 @@ export class LibraryService {
       ["downloadPollMs", String(next.downloadPollMs)],
       ["mockDownloadMs", String(next.mockDownloadMs)],
       ["logLevel", next.logLevel],
+      ["downloadRetryMaxAttempts", String(next.downloadRetryMaxAttempts)],
+      ["downloadRetryBaseDelayMs", String(next.downloadRetryBaseDelayMs)],
     ];
     for (const [k, v] of pairs) set.run(k, v);
 

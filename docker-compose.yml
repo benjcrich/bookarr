@@ -13,6 +13,8 @@ services:
       HOST: 0.0.0.0
       BOOKARR_DB_PATH: /data/bookarr.db
       BOOKARR_LIBRARY_ROOT: /data/audiobooks
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       DOWNLOAD_CLIENT_MODE: ${DOWNLOAD_CLIENT_MODE:-mock}
       METADATA_MODE: ${METADATA_MODE:-auto}
       PROWLARR_URL: ${PROWLARR_URL:-}
@@ -25,7 +27,9 @@ services:
       SABNZBD_API_KEY: ${SABNZBD_API_KEY:-}
       SABNZBD_CATEGORY: ${SABNZBD_CATEGORY:-bookarr}
       HARDCOVER_API_KEY: ${HARDCOVER_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
+      # Entrypoint fixes ownership of /data for PUID/PGID (preserves existing DB).
       - bookarr-data:/data
     restart: unless-stopped
 

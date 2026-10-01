@@ -189,6 +189,17 @@ export async function registerRoutes(
     return { polled: updated.length, jobs: library.listDownloads() };
   });
 
+  app.post<{ Params: { id: string } }>("/api/downloads/:id/retry", async (req, reply) => {
+    const before = library.getDownload(Number(req.params.id));
+    if (!before) return reply.code(404).send({ error: "Download job not found" });
+    const job = await library.retryDownload(before.id, { manual: true });
+    if (!job) return reply.code(404).send({ error: "Download job not found" });
+    return {
+      job,
+      retried: job.attempts > before.attempts || job.status !== "failed",
+    };
+  });
+
   app.get("/api/download-clients", async () => {
     const settings = library.getSettings();
     return clients.health(settings);
@@ -226,6 +237,8 @@ export async function registerRoutes(
         downloadPollMs: z.number().int().positive().optional(),
         mockDownloadMs: z.number().int().positive().optional(),
         logLevel: z.enum(["debug", "info", "warn", "error"]).optional(),
+        downloadRetryMaxAttempts: z.number().int().positive().max(50).optional(),
+        downloadRetryBaseDelayMs: z.number().int().positive().optional(),
         clearSecrets: z.array(z.enum(secretKeys)).optional(),
       })
       .parse(req.body);

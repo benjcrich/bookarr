@@ -43,9 +43,21 @@ Open http://localhost:8787 — configure Prowlarr, download clients, and metadat
 | Volume `bookarr-data` → `/data` | SQLite at `/data/bookarr.db`, library at `/data/audiobooks` |
 | `BOOKARR_TAG` | Image tag (default `latest`) — compose-only |
 | `BOOKARR_PORT` | Host port (default `8787`) — compose-only |
+| `PUID` / `PGID` | App user ids (default `1000`) — entrypoint chowns `/data` then drops privileges |
 | Optional `PROWLARR_*`, `QBITTORRENT_*`, `SABNZBD_*`, `METADATA_*` | First-boot bootstrap into SQLite; UI saves win afterward |
 
 Compose file lives at [`deploy/docker-compose.yml`](deploy/docker-compose.yml) (pull-only — no `build:`).
+
+### Volume / library permissions
+
+Docker named volumes are often root-owned on first create. Bookarr’s entrypoint runs as root briefly, ensures `/data` and `BOOKARR_LIBRARY_ROOT` are writable by `PUID`/`PGID` (default 1000 = `node`), **without deleting** existing `bookarr.db`, then drops privileges.
+
+If you bind-mount a host library (`/path/on/host:/data/audiobooks`), either:
+
+1. `chown -R 1000:1000 /path/on/host` (or your `PUID:PGID`), or  
+2. Set `PUID`/`PGID` in `.env` to the host directory owner.
+
+On `EACCES` during import, logs and the job error include a short ownership hint; failed jobs auto-retry with backoff and can be **Retry**’d from Admin → Downloads after fixing permissions.
 
 ### GHCR visibility (one-time)
 

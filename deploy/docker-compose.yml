@@ -19,6 +19,9 @@ services:
       BOOKARR_DB_PATH: /data/bookarr.db
       BOOKARR_LIBRARY_ROOT: /data/audiobooks
       BOOKARR_DOWNLOAD_POLL_MS: ${BOOKARR_DOWNLOAD_POLL_MS:-3000}
+      # Match host user for bind-mounted libraries (default 1000 = image `node` user)
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       DOWNLOAD_CLIENT_MODE: ${DOWNLOAD_CLIENT_MODE:-mock}
       METADATA_MODE: ${METADATA_MODE:-auto}
       METADATA_CACHE_TTL_HOURS: ${METADATA_CACHE_TTL_HOURS:-24}
@@ -32,10 +35,13 @@ services:
       SABNZBD_API_KEY: ${SABNZBD_API_KEY:-}
       SABNZBD_CATEGORY: ${SABNZBD_CATEGORY:-bookarr}
       HARDCOVER_API_KEY: ${HARDCOVER_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       # SQLite DB lives under /data; library imports under /data/audiobooks
+      # Entrypoint chowns /data for PUID/PGID on start (does not wipe existing DB).
       - bookarr-data:/data
-      # Optional: bind-mount a host library path instead of the named volume subpath
+      # Optional: bind-mount a host library path instead of the named volume subpath.
+      # Ensure the host path is owned by PUID:PGID (or let entrypoint chown the mount root).
       # - /path/on/host/audiobooks:/data/audiobooks
     restart: unless-stopped
     healthcheck:
@@ -49,7 +55,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 20s
 
 volumes:
   bookarr-data:

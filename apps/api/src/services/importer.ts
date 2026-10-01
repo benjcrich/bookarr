@@ -28,10 +28,19 @@ export function importCompletedDownload(input: {
   try {
     fs.mkdirSync(destDir, { recursive: true });
   } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const msg = (err as Error).message;
+    const hint =
+      code === "EACCES" || code === "EPERM"
+        ? ` Permission denied writing library root (${input.libraryRoot}). ` +
+          `The container user cannot create folders there — usually a root-owned Docker volume or bind mount. ` +
+          `Fix: restart with the latest image (entrypoint chowns /data), or set PUID/PGID to the volume owner, ` +
+          `or on the host run: chown -R <PUID>:<PGID> <host-path-for-/data>. Existing DB files are preserved.`
+        : "";
     return {
       ok: false,
       importPath: null,
-      detail: `Could not create library path: ${(err as Error).message}`,
+      detail: `Could not create library path: ${msg}.${hint}`,
       stub: true,
     };
   }
