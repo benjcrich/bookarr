@@ -36,6 +36,8 @@ export class DownloadClientRegistry {
       apiKey: settings.sabnzbdApiKey,
       category: settings.sabnzbdCategory,
     });
+    this.mockTorrent.setDurationMs(settings.mockDownloadMs);
+    this.mockUsenet.setDurationMs(settings.mockDownloadMs);
   }
 
   forProtocol(protocol: string, mode: "mock" | "auto"): DownloadClientAdapter {

@@ -97,6 +97,12 @@ export interface DownloadJob {
   updatedAt: string;
 }
 
+export type SecretSettingKey =
+  | "prowlarrApiKey"
+  | "qbittorrentPassword"
+  | "sabnzbdApiKey"
+  | "hardcoverApiKey";
+
 export interface AppSettings {
   prowlarrUrl: string;
   prowlarrApiKey: string;
@@ -116,6 +122,10 @@ export interface AppSettings {
   metadataMode: "mock" | "auto";
   hardcoverApiKey: string;
   metadataCacheTtlHours: number;
+  /** Background download poll interval (ms) */
+  downloadPollMs: number;
+  /** Mock download client completion delay (ms) */
+  mockDownloadMs: number;
 }
 
 export interface ProwlarrIndexer {

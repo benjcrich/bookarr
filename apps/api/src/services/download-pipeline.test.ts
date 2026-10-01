@@ -37,11 +37,14 @@ describe("download pipeline (mock clients)", () => {
       metadataMode: "mock",
       hardcoverApiKey: "",
       metadataCacheTtlHours: 24,
+      downloadPollMs: 3000,
+      mockDownloadMs: 50,
     });
     library = new LibraryService(db, prowlarr, clients);
     library.updateSettings({
       libraryRoot: path.join(tmp, "library"),
       downloadClientMode: "mock",
+      mockDownloadMs: 50,
     });
   });
 

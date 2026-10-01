@@ -17,70 +17,38 @@ async function main() {
   const port = Number(process.env.PORT || 8787);
   const host = process.env.HOST || "0.0.0.0";
   const dbPath = process.env.BOOKARR_DB_PATH || path.join(process.cwd(), "data", "bookarr.db");
-  const pollMs = Number(process.env.BOOKARR_DOWNLOAD_POLL_MS || 3000);
 
   const db = openDatabase(dbPath);
-  const prowlarr = new ProwlarrClient(
-    process.env.PROWLARR_URL || "",
-    process.env.PROWLARR_API_KEY || ""
-  );
-
-  const bootstrapSettings = {
-    prowlarrUrl: process.env.PROWLARR_URL || "",
-    prowlarrApiKey: process.env.PROWLARR_API_KEY || "",
-    libraryRoot: process.env.BOOKARR_LIBRARY_ROOT || "/data/audiobooks",
+  const prowlarr = new ProwlarrClient("", "");
+  const clients = new DownloadClientRegistry({
+    prowlarrUrl: "",
+    prowlarrApiKey: "",
+    libraryRoot: "/data/audiobooks",
     qualityProfileId: 1,
     autoSearchOnApprove: true,
-    downloadClientMode: (process.env.DOWNLOAD_CLIENT_MODE === "auto" ? "auto" : "mock") as
-      | "mock"
-      | "auto",
-    qbittorrentUrl: process.env.QBITTORRENT_URL || "",
-    qbittorrentUsername: process.env.QBITTORRENT_USERNAME || "admin",
-    qbittorrentPassword: process.env.QBITTORRENT_PASSWORD || "",
-    qbittorrentCategory: process.env.QBITTORRENT_CATEGORY || "bookarr",
-    sabnzbdUrl: process.env.SABNZBD_URL || "",
-    sabnzbdApiKey: process.env.SABNZBD_API_KEY || "",
-    sabnzbdCategory: process.env.SABNZBD_CATEGORY || "bookarr",
-    metadataMode: (process.env.METADATA_MODE === "mock" ? "mock" : "auto") as "mock" | "auto",
-    hardcoverApiKey: process.env.HARDCOVER_API_KEY || "",
-    metadataCacheTtlHours: Number(process.env.METADATA_CACHE_TTL_HOURS || 24),
-  };
-
-  const clients = new DownloadClientRegistry(bootstrapSettings);
+    downloadClientMode: "mock",
+    qbittorrentUrl: "",
+    qbittorrentUsername: "admin",
+    qbittorrentPassword: "",
+    qbittorrentCategory: "bookarr",
+    sabnzbdUrl: "",
+    sabnzbdApiKey: "",
+    sabnzbdCategory: "bookarr",
+    metadataMode: "auto",
+    hardcoverApiKey: "",
+    metadataCacheTtlHours: 24,
+    downloadPollMs: 3000,
+    mockDownloadMs: 1500,
+  });
   const library = new LibraryService(db, prowlarr, clients);
 
-  // Persist env overrides into settings on boot
+  // Env bootstraps missing keys only — UI/DB values are never overwritten on restart
+  library.bootstrapEnvIntoDb();
   const settings = library.getSettings();
-  library.updateSettings({
-    prowlarrUrl: process.env.PROWLARR_URL || settings.prowlarrUrl,
-    prowlarrApiKey: process.env.PROWLARR_API_KEY || settings.prowlarrApiKey,
-    libraryRoot: process.env.BOOKARR_LIBRARY_ROOT || settings.libraryRoot,
-    downloadClientMode:
-      process.env.DOWNLOAD_CLIENT_MODE === "auto"
-        ? "auto"
-        : process.env.DOWNLOAD_CLIENT_MODE === "mock"
-          ? "mock"
-          : settings.downloadClientMode,
-    qbittorrentUrl: process.env.QBITTORRENT_URL || settings.qbittorrentUrl,
-    qbittorrentUsername: process.env.QBITTORRENT_USERNAME || settings.qbittorrentUsername,
-    qbittorrentPassword: process.env.QBITTORRENT_PASSWORD || settings.qbittorrentPassword,
-    qbittorrentCategory: process.env.QBITTORRENT_CATEGORY || settings.qbittorrentCategory,
-    sabnzbdUrl: process.env.SABNZBD_URL || settings.sabnzbdUrl,
-    sabnzbdApiKey: process.env.SABNZBD_API_KEY || settings.sabnzbdApiKey,
-    sabnzbdCategory: process.env.SABNZBD_CATEGORY || settings.sabnzbdCategory,
-    metadataMode:
-      process.env.METADATA_MODE === "mock"
-        ? "mock"
-        : process.env.METADATA_MODE === "auto"
-          ? "auto"
-          : settings.metadataMode,
-    hardcoverApiKey: process.env.HARDCOVER_API_KEY || settings.hardcoverApiKey,
-    metadataCacheTtlHours: process.env.METADATA_CACHE_TTL_HOURS
-      ? Number(process.env.METADATA_CACHE_TTL_HOURS)
-      : settings.metadataCacheTtlHours,
-  });
+  prowlarr.updateConfig(settings.prowlarrUrl, settings.prowlarrApiKey);
+  clients.updateFromSettings(settings);
 
-  const metadata = new MetadataService(db, library.getSettings());
+  const metadata = new MetadataService(db, settings);
   library.setMetadataService(metadata);
 
   const app = Fastify({ logger: true });
@@ -98,14 +66,32 @@ async function main() {
     });
   }
 
-  const timer = setInterval(() => {
-    library.pollDownloads().catch((err) => app.log.warn({ err }, "download poll failed"));
-  }, pollMs);
-  timer.unref?.();
+  // Poll loop reads interval from settings each cycle (hot-reload friendly)
+  let polling = true;
+  const pollLoop = async () => {
+    while (polling) {
+      const ms = Math.max(500, library.getSettings().downloadPollMs || 3000);
+      try {
+        await library.pollDownloads();
+      } catch (err) {
+        app.log.warn({ err }, "download poll failed");
+      }
+      await new Promise((r) => setTimeout(r, ms));
+    }
+  };
+  void pollLoop();
 
   await app.listen({ port, host });
   app.log.info(`Bookarr API listening on http://${host}:${port}`);
-  app.log.info(`Download poll interval ${pollMs}ms`);
+  app.log.info(
+    `Settings precedence: UI/DB wins; env bootstraps missing keys only (poll=${settings.downloadPollMs}ms)`
+  );
+
+  const shutdown = () => {
+    polling = false;
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 main().catch((err) => {

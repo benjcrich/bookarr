@@ -7,6 +7,7 @@ import type {
   DownloadJob,
   QualityProfile,
   RequestStatus,
+  SecretSettingKey,
 } from "../domain/types.js";
 import type { DownloadClientRegistry } from "./download-clients/index.js";
 import { importCompletedDownload } from "./importer.js";
@@ -86,10 +87,27 @@ function mapJob(row: Record<string, unknown>): DownloadJob {
   };
 }
 
-function envOr(map: Record<string, string>, key: string, envName: string, fallback = ""): string {
-  const fromEnv = process.env[envName];
-  if (fromEnv != null && fromEnv !== "") return fromEnv;
-  return map[key] ?? fallback;
+/**
+ * Settings precedence for reads:
+ * 1) Value persisted in SQLite (Admin UI / prior bootstrap) — wins
+ * 2) Process env — only when the key is absent from the DB
+ * 3) Built-in default
+ *
+ * Env is applied at boot via bootstrapEnvIntoDb() with INSERT OR IGNORE,
+ * so UI saves are not overwritten on container restart.
+ */
+function setting(
+  map: Record<string, string>,
+  key: string,
+  envName: string | null,
+  fallback = ""
+): string {
+  if (Object.prototype.hasOwnProperty.call(map, key)) return map[key] ?? "";
+  if (envName) {
+    const fromEnv = process.env[envName];
+    if (fromEnv != null && fromEnv !== "") return fromEnv;
+  }
+  return fallback;
 }
 
 export class LibraryService {
@@ -630,35 +648,85 @@ export class LibraryService {
     }
   }
 
+  /**
+   * Seed missing settings keys from process env (INSERT OR IGNORE).
+   * Never overwrites values already saved in the DB / Admin UI.
+   */
+  bootstrapEnvIntoDb(): void {
+    const insert = this.db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`);
+    const pairs: Array<[string, string | undefined]> = [
+      ["prowlarrUrl", process.env.PROWLARR_URL],
+      ["prowlarrApiKey", process.env.PROWLARR_API_KEY],
+      ["libraryRoot", process.env.BOOKARR_LIBRARY_ROOT],
+      ["downloadClientMode", process.env.DOWNLOAD_CLIENT_MODE],
+      ["qbittorrentUrl", process.env.QBITTORRENT_URL],
+      ["qbittorrentUsername", process.env.QBITTORRENT_USERNAME],
+      ["qbittorrentPassword", process.env.QBITTORRENT_PASSWORD],
+      ["qbittorrentCategory", process.env.QBITTORRENT_CATEGORY],
+      ["sabnzbdUrl", process.env.SABNZBD_URL],
+      ["sabnzbdApiKey", process.env.SABNZBD_API_KEY],
+      ["sabnzbdCategory", process.env.SABNZBD_CATEGORY],
+      ["metadataMode", process.env.METADATA_MODE],
+      ["hardcoverApiKey", process.env.HARDCOVER_API_KEY],
+      ["metadataCacheTtlHours", process.env.METADATA_CACHE_TTL_HOURS],
+      ["downloadPollMs", process.env.BOOKARR_DOWNLOAD_POLL_MS],
+      ["mockDownloadMs", process.env.BOOKARR_MOCK_DOWNLOAD_MS],
+    ];
+    for (const [key, value] of pairs) {
+      if (value != null && String(value).trim() !== "") insert.run(key, String(value));
+    }
+    // Sensible defaults when neither env nor prior UI value exists
+    insert.run("libraryRoot", "/data/audiobooks");
+    insert.run("downloadClientMode", "mock");
+    insert.run("qbittorrentUsername", "admin");
+    insert.run("qbittorrentCategory", "bookarr");
+    insert.run("sabnzbdCategory", "bookarr");
+    insert.run("metadataMode", "auto");
+    insert.run("metadataCacheTtlHours", "24");
+    insert.run("qualityProfileId", "2");
+    insert.run("autoSearchOnApprove", "true");
+    insert.run("downloadPollMs", "3000");
+    insert.run("mockDownloadMs", "1500");
+  }
+
   getSettings(): AppSettings {
     const rows = this.db.prepare("SELECT key, value FROM settings").all() as Array<{ key: string; value: string }>;
     const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-    const modeRaw = envOr(map, "downloadClientMode", "DOWNLOAD_CLIENT_MODE", "mock");
+    const modeRaw = setting(map, "downloadClientMode", "DOWNLOAD_CLIENT_MODE", "mock");
+    const metaRaw = setting(map, "metadataMode", "METADATA_MODE", "auto");
     return {
-      prowlarrUrl: envOr(map, "prowlarrUrl", "PROWLARR_URL"),
-      prowlarrApiKey: envOr(map, "prowlarrApiKey", "PROWLARR_API_KEY"),
-      libraryRoot: envOr(map, "libraryRoot", "BOOKARR_LIBRARY_ROOT", "/data/audiobooks"),
-      qualityProfileId: Number(map.qualityProfileId || 1),
-      autoSearchOnApprove: (map.autoSearchOnApprove ?? "true") === "true",
+      prowlarrUrl: setting(map, "prowlarrUrl", "PROWLARR_URL"),
+      prowlarrApiKey: setting(map, "prowlarrApiKey", "PROWLARR_API_KEY"),
+      libraryRoot: setting(map, "libraryRoot", "BOOKARR_LIBRARY_ROOT", "/data/audiobooks"),
+      qualityProfileId: Number(setting(map, "qualityProfileId", null, "1") || 1),
+      autoSearchOnApprove: setting(map, "autoSearchOnApprove", null, "true") === "true",
       downloadClientMode: modeRaw === "auto" ? "auto" : "mock",
-      qbittorrentUrl: envOr(map, "qbittorrentUrl", "QBITTORRENT_URL"),
-      qbittorrentUsername: envOr(map, "qbittorrentUsername", "QBITTORRENT_USERNAME", "admin"),
-      qbittorrentPassword: envOr(map, "qbittorrentPassword", "QBITTORRENT_PASSWORD"),
-      qbittorrentCategory: envOr(map, "qbittorrentCategory", "QBITTORRENT_CATEGORY", "bookarr"),
-      sabnzbdUrl: envOr(map, "sabnzbdUrl", "SABNZBD_URL"),
-      sabnzbdApiKey: envOr(map, "sabnzbdApiKey", "SABNZBD_API_KEY"),
-      sabnzbdCategory: envOr(map, "sabnzbdCategory", "SABNZBD_CATEGORY", "bookarr"),
-      metadataMode: envOr(map, "metadataMode", "METADATA_MODE", "auto") === "mock" ? "mock" : "auto",
-      hardcoverApiKey: envOr(map, "hardcoverApiKey", "HARDCOVER_API_KEY"),
+      qbittorrentUrl: setting(map, "qbittorrentUrl", "QBITTORRENT_URL"),
+      qbittorrentUsername: setting(map, "qbittorrentUsername", "QBITTORRENT_USERNAME", "admin"),
+      qbittorrentPassword: setting(map, "qbittorrentPassword", "QBITTORRENT_PASSWORD"),
+      qbittorrentCategory: setting(map, "qbittorrentCategory", "QBITTORRENT_CATEGORY", "bookarr"),
+      sabnzbdUrl: setting(map, "sabnzbdUrl", "SABNZBD_URL"),
+      sabnzbdApiKey: setting(map, "sabnzbdApiKey", "SABNZBD_API_KEY"),
+      sabnzbdCategory: setting(map, "sabnzbdCategory", "SABNZBD_CATEGORY", "bookarr"),
+      metadataMode: metaRaw === "mock" ? "mock" : "auto",
+      hardcoverApiKey: setting(map, "hardcoverApiKey", "HARDCOVER_API_KEY"),
       metadataCacheTtlHours: Number(
-        envOr(map, "metadataCacheTtlHours", "METADATA_CACHE_TTL_HOURS", "24") || 24
+        setting(map, "metadataCacheTtlHours", "METADATA_CACHE_TTL_HOURS", "24") || 24
       ),
+      downloadPollMs: Number(setting(map, "downloadPollMs", "BOOKARR_DOWNLOAD_POLL_MS", "3000") || 3000),
+      mockDownloadMs: Number(setting(map, "mockDownloadMs", "BOOKARR_MOCK_DOWNLOAD_MS", "1500") || 1500),
     };
   }
 
-  updateSettings(patch: Partial<AppSettings>): AppSettings {
+  updateSettings(
+    patch: Partial<AppSettings>,
+    opts?: { clearSecrets?: SecretSettingKey[] }
+  ): AppSettings {
     const current = this.getSettings();
     const next: AppSettings = { ...current, ...patch };
+    for (const secret of opts?.clearSecrets ?? []) {
+      next[secret] = "";
+    }
     const set = this.db.prepare(
       `INSERT INTO settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
@@ -680,9 +748,12 @@ export class LibraryService {
       ["metadataMode", next.metadataMode],
       ["hardcoverApiKey", next.hardcoverApiKey],
       ["metadataCacheTtlHours", String(next.metadataCacheTtlHours)],
+      ["downloadPollMs", String(next.downloadPollMs)],
+      ["mockDownloadMs", String(next.mockDownloadMs)],
     ];
     for (const [k, v] of pairs) set.run(k, v);
 
+    // Hot-reload in-process clients — no container restart required
     this.prowlarr.updateConfig(next.prowlarrUrl, next.prowlarrApiKey);
     this.clients.updateFromSettings(next);
     this.metadata?.updateFromSettings(next);
@@ -701,6 +772,8 @@ export class LibraryService {
       sabnzbdApiKeySet: Boolean(s.sabnzbdApiKey),
       hardcoverApiKey: s.hardcoverApiKey ? "••••••••" : "",
       hardcoverApiKeySet: Boolean(s.hardcoverApiKey),
+      precedence: "ui-db-over-env",
+      note: "Saved settings persist in SQLite and win over env after first boot. Env only bootstraps missing keys.",
     };
   }
 

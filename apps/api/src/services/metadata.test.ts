@@ -25,6 +25,8 @@ function settings(tmp: string, mode: "mock" | "auto" = "mock"): AppSettings {
     metadataMode: mode,
     hardcoverApiKey: "",
     metadataCacheTtlHours: 24,
+    downloadPollMs: 3000,
+    mockDownloadMs: 1500,
   };
 }
 
