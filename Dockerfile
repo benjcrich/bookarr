@@ -33,20 +33,18 @@ LABEL org.opencontainers.image.title="Bookarr" \
       org.opencontainers.image.url="https://github.com/benjcrich/bookarr" \
       org.opencontainers.image.licenses="MIT"
 
-RUN groupadd --gid 1000 bookarr \
-  && useradd --uid 1000 --gid bookarr --shell /usr/sbin/nologin --create-home bookarr \
-  && mkdir -p /data/audiobooks \
-  && chown -R bookarr:bookarr /data
+# node:bookworm-slim already ships uid/gid 1000 as user "node"
+RUN mkdir -p /data/audiobooks && chown -R node:node /data /app
 
-COPY --from=build --chown=bookarr:bookarr /app/package.json ./
-COPY --from=build --chown=bookarr:bookarr /app/package-lock.json ./
-COPY --from=build --chown=bookarr:bookarr /app/node_modules ./node_modules
-COPY --from=build --chown=bookarr:bookarr /app/apps/api/package.json apps/api/
-COPY --from=build --chown=bookarr:bookarr /app/apps/web/package.json apps/web/
-COPY --from=build --chown=bookarr:bookarr /app/apps/api/dist apps/api/dist
-COPY --from=build --chown=bookarr:bookarr /app/apps/web/dist apps/web/dist
+COPY --from=build --chown=node:node /app/package.json ./
+COPY --from=build --chown=node:node /app/package-lock.json ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/apps/api/package.json apps/api/
+COPY --from=build --chown=node:node /app/apps/web/package.json apps/web/
+COPY --from=build --chown=node:node /app/apps/api/dist apps/api/dist
+COPY --from=build --chown=node:node /app/apps/web/dist apps/web/dist
 
-USER bookarr
+USER node
 EXPOSE 8787
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
