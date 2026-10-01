@@ -5,6 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDatabase } from "./db/database.js";
+import { defaultSettings } from "./domain/defaults.js";
+import { log, parseLogLevel } from "./log.js";
 import { registerRoutes } from "./routes/index.js";
 import { DownloadClientRegistry } from "./services/download-clients/index.js";
 import { LibraryService } from "./services/library.js";
@@ -17,42 +19,52 @@ async function main() {
   const port = Number(process.env.PORT || 8787);
   const host = process.env.HOST || "0.0.0.0";
   const dbPath = process.env.BOOKARR_DB_PATH || path.join(process.cwd(), "data", "bookarr.db");
+  const bootLogLevel = parseLogLevel(process.env.LOG_LEVEL, "info");
+  log.setLevel(bootLogLevel);
 
   const db = openDatabase(dbPath);
   const prowlarr = new ProwlarrClient("", "");
-  const clients = new DownloadClientRegistry({
-    prowlarrUrl: "",
-    prowlarrApiKey: "",
-    libraryRoot: "/data/audiobooks",
-    qualityProfileId: 1,
-    autoSearchOnApprove: true,
-    downloadClientMode: "mock",
-    qbittorrentUrl: "",
-    qbittorrentUsername: "admin",
-    qbittorrentPassword: "",
-    qbittorrentCategory: "bookarr",
-    sabnzbdUrl: "",
-    sabnzbdApiKey: "",
-    sabnzbdCategory: "bookarr",
-    metadataMode: "auto",
-    hardcoverApiKey: "",
-    metadataCacheTtlHours: 24,
-    downloadPollMs: 3000,
-    mockDownloadMs: 1500,
-  });
+  const clients = new DownloadClientRegistry(defaultSettings());
   const library = new LibraryService(db, prowlarr, clients);
 
   // Env bootstraps missing keys only — UI/DB values are never overwritten on restart
   library.bootstrapEnvIntoDb();
   const settings = library.getSettings();
+  log.setLevel(settings.logLevel);
   prowlarr.updateConfig(settings.prowlarrUrl, settings.prowlarrApiKey);
   clients.updateFromSettings(settings);
 
   const metadata = new MetadataService(db, settings);
   library.setMetadataService(metadata);
 
-  const app = Fastify({ logger: true });
+  // Quiet by default: no per-request access spam. Debug enables HTTP access lines.
+  const app = Fastify({
+    logger: false,
+    disableRequestLogging: true,
+  });
   await app.register(cors, { origin: true });
+
+  app.addHook("onResponse", async (req, reply) => {
+    if (log.getLevel() === "debug") {
+      log.debug("http", {
+        method: req.method,
+        url: req.url,
+        status: reply.statusCode,
+        ms: Math.round(reply.elapsedTime),
+      });
+      return;
+    }
+    // Default: no access spam — only failed API responses
+    if (!req.url.startsWith("/api/")) return;
+    if (reply.statusCode < 400) return;
+    log.warn("http.error", {
+      method: req.method,
+      url: req.url,
+      status: reply.statusCode,
+      ms: Math.round(reply.elapsedTime),
+    });
+  });
+
   await registerRoutes(app, library, prowlarr, clients, metadata);
 
   const webDist = path.resolve(__dirname, "../../web/dist");
@@ -74,7 +86,7 @@ async function main() {
       try {
         await library.pollDownloads();
       } catch (err) {
-        app.log.warn({ err }, "download poll failed");
+        log.warn("download.poll.failed", { error: (err as Error).message });
       }
       await new Promise((r) => setTimeout(r, ms));
     }
@@ -82,19 +94,23 @@ async function main() {
   void pollLoop();
 
   await app.listen({ port, host });
-  app.log.info(`Bookarr API listening on http://${host}:${port}`);
-  app.log.info(
-    `Settings precedence: UI/DB wins; env bootstraps missing keys only (poll=${settings.downloadPollMs}ms)`
-  );
+  log.info("bookarr.started", {
+    host,
+    port,
+    dbPath,
+    logLevel: settings.logLevel,
+  });
+  log.info("bookarr.config", library.settingsSummary(settings));
 
   const shutdown = () => {
     polling = false;
+    log.info("bookarr.shutdown");
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error("ERROR bookarr.fatal", err);
   process.exit(1);
 });

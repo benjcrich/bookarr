@@ -106,6 +106,16 @@ export type SecretSettingKey =
 export interface AppSettings {
   prowlarrUrl: string;
   prowlarrApiKey: string;
+  /**
+   * Optional Prowlarr indexer IDs to search. Empty = all indexers.
+   * Passed as `indexerIds` to GET /api/v1/search when non-empty.
+   */
+  prowlarrIndexerIds: number[];
+  /**
+   * Optional Newznab/Torznab category IDs (e.g. 3030 = Books/Audiobook).
+   * Empty = no category filter. Passed as `categories` when non-empty.
+   */
+  prowlarrCategories: number[];
   libraryRoot: string;
   qualityProfileId: number;
   autoSearchOnApprove: boolean;
@@ -126,6 +136,39 @@ export interface AppSettings {
   downloadPollMs: number;
   /** Mock download client completion delay (ms) */
   mockDownloadMs: number;
+  /** Application log level (also bootstrapped from LOG_LEVEL env) */
+  logLevel: "debug" | "info" | "warn" | "error";
+}
+
+/** Parse comma/space/JSON list of positive ints from settings/env/UI. */
+export function parseIdList(value: string | number[] | null | undefined): number[] {
+  if (value == null) return [];
+  if (Array.isArray(value)) {
+    return [...new Set(value.map(Number).filter((n) => Number.isInteger(n) && n > 0))].sort(
+      (a, b) => a - b
+    );
+  }
+  const trimmed = String(value).trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[")) {
+    try {
+      return parseIdList(JSON.parse(trimmed) as number[]);
+    } catch {
+      /* fall through */
+    }
+  }
+  return [
+    ...new Set(
+      trimmed
+        .split(/[\s,;]+/)
+        .map((p) => Number(p))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    ),
+  ].sort((a, b) => a - b);
+}
+
+export function serializeIdList(ids: number[]): string {
+  return parseIdList(ids).join(",");
 }
 
 export interface ProwlarrIndexer {

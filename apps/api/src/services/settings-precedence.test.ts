@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { openDatabase } from "../db/database.js";
+import { defaultSettings } from "../domain/defaults.js";
 import { DownloadClientRegistry } from "./download-clients/index.js";
 import { LibraryService } from "./library.js";
 import { ProwlarrClient } from "./prowlarr.js";
@@ -21,26 +22,7 @@ describe("settings precedence (UI/DB over env)", () => {
     process.env.PROWLARR_URL = "http://env-prowlarr:9696";
     process.env.PROWLARR_API_KEY = "env-secret";
     const db = openDatabase(path.join(tmp, "settings.db"));
-    const clients = new DownloadClientRegistry({
-      prowlarrUrl: "",
-      prowlarrApiKey: "",
-      libraryRoot: "/data/audiobooks",
-      qualityProfileId: 1,
-      autoSearchOnApprove: true,
-      downloadClientMode: "mock",
-      qbittorrentUrl: "",
-      qbittorrentUsername: "admin",
-      qbittorrentPassword: "",
-      qbittorrentCategory: "bookarr",
-      sabnzbdUrl: "",
-      sabnzbdApiKey: "",
-      sabnzbdCategory: "bookarr",
-      metadataMode: "auto",
-      hardcoverApiKey: "",
-      metadataCacheTtlHours: 24,
-      downloadPollMs: 3000,
-      mockDownloadMs: 1500,
-    });
+    const clients = new DownloadClientRegistry(defaultSettings());
     library = new LibraryService(db, new ProwlarrClient("", ""), clients);
     library.bootstrapEnvIntoDb();
   });
@@ -85,5 +67,17 @@ describe("settings precedence (UI/DB over env)", () => {
     const pub = library.publicSettings();
     assert.equal(pub.sabnzbdApiKey, "••••••••");
     assert.equal(pub.sabnzbdApiKeySet, true);
+  });
+
+  it("persists prowlarr indexer and category filters", async () => {
+    library.updateSettings({
+      prowlarrIndexerIds: [1, 4],
+      prowlarrCategories: [3030],
+    });
+    const s = library.getSettings();
+    assert.deepEqual(s.prowlarrIndexerIds, [1, 4]);
+    assert.deepEqual(s.prowlarrCategories, [3030]);
+    const releases = await library.searchReleases("Mistborn");
+    assert.ok(releases.every((r) => r.indexerId === 1 || r.indexerId === 4));
   });
 });

@@ -9,6 +9,8 @@ import type {
   RequestStatus,
   SecretSettingKey,
 } from "../domain/types.js";
+import { parseIdList, serializeIdList } from "../domain/types.js";
+import { log, parseLogLevel } from "../log.js";
 import type { DownloadClientRegistry } from "./download-clients/index.js";
 import { importCompletedDownload } from "./importer.js";
 import type { MetadataService } from "./metadata/index.js";
@@ -402,7 +404,7 @@ export class LibraryService {
 
     const settings = this.getSettings();
     if (settings.autoSearchOnApprove) {
-      const releases = await this.prowlarr.search(`${req.title} ${req.authorName}`);
+      const releases = await this.searchReleases(`${req.title} ${req.authorName}`);
       if (releases[0]) {
         await this.enqueueGrab({
           audiobookId: book.id,
@@ -423,6 +425,33 @@ export class LibraryService {
       )
       .run(reason ?? null, id);
     return mapRequest(this.db.prepare("SELECT * FROM requests WHERE id = ?").get(id) as Record<string, unknown>);
+  }
+
+  /** Search Prowlarr using configured indexer/category filters (either, both, or neither). */
+  async searchReleases(query: string) {
+    const settings = this.getSettings();
+    return this.prowlarr.search(query, {
+      indexerIds: settings.prowlarrIndexerIds,
+      categories: settings.prowlarrCategories,
+    });
+  }
+
+  /** Redacted config summary for startup / settings-save logs. */
+  settingsSummary(s = this.getSettings()) {
+    return {
+      prowlarrUrl: s.prowlarrUrl || "(unset)",
+      prowlarrApiKeySet: Boolean(s.prowlarrApiKey),
+      prowlarrIndexerIds: s.prowlarrIndexerIds,
+      prowlarrCategories: s.prowlarrCategories,
+      libraryRoot: s.libraryRoot,
+      downloadClientMode: s.downloadClientMode,
+      qbittorrentUrl: s.qbittorrentUrl || "(unset)",
+      sabnzbdUrl: s.sabnzbdUrl || "(unset)",
+      metadataMode: s.metadataMode,
+      hardcoverApiKeySet: Boolean(s.hardcoverApiKey),
+      downloadPollMs: s.downloadPollMs,
+      logLevel: s.logLevel,
+    };
   }
 
   listDownloads(): DownloadJob[] {
@@ -490,6 +519,14 @@ export class LibraryService {
     }
 
     const client = this.clients.forProtocol(input.release.protocol, settings.downloadClientMode);
+    log.info("download.enqueue", {
+      jobId,
+      title: input.release.title,
+      protocol: input.release.protocol,
+      client: client.kind,
+      indexer: input.release.indexer,
+      audiobookId: input.audiobookId ?? null,
+    });
     const added = await client.add({
       title: input.release.title,
       downloadUrl: input.release.downloadUrl,
@@ -500,6 +537,11 @@ export class LibraryService {
     });
 
     if (!added.accepted) {
+      log.warn("download.enqueue.rejected", {
+        jobId,
+        client: client.kind,
+        detail: added.detail,
+      });
       this.db
         .prepare(
           `UPDATE download_jobs SET
@@ -523,6 +565,12 @@ export class LibraryService {
       )
       .run(client.kind, added.externalId, jobId);
 
+    log.info("download.enqueue.accepted", {
+      jobId,
+      client: client.kind,
+      externalId: added.externalId,
+    });
+
     if (input.audiobookId) {
       this.updateBookFlags(input.audiobookId, { status: "downloading", wanted: true, monitored: true });
     }
@@ -543,6 +591,9 @@ export class LibraryService {
 
     const settings = this.getSettings();
     const updated: DownloadJob[] = [];
+    if (active.length > 0) {
+      log.debug("download.poll", { active: active.length });
+    }
 
     for (const job of active) {
       if (!job.externalId || !job.client) continue;
@@ -559,6 +610,11 @@ export class LibraryService {
       try {
         remote = await adapter.status(job.externalId);
       } catch (err) {
+        log.warn("download.poll.error", {
+          jobId: job.id,
+          client: job.client,
+          error: (err as Error).message,
+        });
         this.db
           .prepare(
             `UPDATE download_jobs SET error = ?, updated_at = datetime('now') WHERE id = ?`
@@ -569,6 +625,11 @@ export class LibraryService {
       }
 
       if (remote.state === "failed") {
+        log.warn("download.failed", {
+          jobId: job.id,
+          client: job.client,
+          error: remote.error ?? "Download failed",
+        });
         this.db
           .prepare(
             `UPDATE download_jobs SET
@@ -625,6 +686,14 @@ export class LibraryService {
       outputPath,
     });
 
+    log.info("download.import", {
+      jobId: job.id,
+      ok: imported.ok,
+      stub: imported.stub,
+      importPath: imported.importPath,
+      detail: imported.detail,
+    });
+
     this.db
       .prepare(
         `UPDATE download_jobs SET
@@ -657,6 +726,8 @@ export class LibraryService {
     const pairs: Array<[string, string | undefined]> = [
       ["prowlarrUrl", process.env.PROWLARR_URL],
       ["prowlarrApiKey", process.env.PROWLARR_API_KEY],
+      ["prowlarrIndexerIds", process.env.PROWLARR_INDEXER_IDS],
+      ["prowlarrCategories", process.env.PROWLARR_CATEGORIES],
       ["libraryRoot", process.env.BOOKARR_LIBRARY_ROOT],
       ["downloadClientMode", process.env.DOWNLOAD_CLIENT_MODE],
       ["qbittorrentUrl", process.env.QBITTORRENT_URL],
@@ -671,6 +742,7 @@ export class LibraryService {
       ["metadataCacheTtlHours", process.env.METADATA_CACHE_TTL_HOURS],
       ["downloadPollMs", process.env.BOOKARR_DOWNLOAD_POLL_MS],
       ["mockDownloadMs", process.env.BOOKARR_MOCK_DOWNLOAD_MS],
+      ["logLevel", process.env.LOG_LEVEL],
     ];
     for (const [key, value] of pairs) {
       if (value != null && String(value).trim() !== "") insert.run(key, String(value));
@@ -687,6 +759,9 @@ export class LibraryService {
     insert.run("autoSearchOnApprove", "true");
     insert.run("downloadPollMs", "3000");
     insert.run("mockDownloadMs", "1500");
+    insert.run("prowlarrIndexerIds", "");
+    insert.run("prowlarrCategories", "");
+    insert.run("logLevel", "info");
   }
 
   getSettings(): AppSettings {
@@ -697,6 +772,12 @@ export class LibraryService {
     return {
       prowlarrUrl: setting(map, "prowlarrUrl", "PROWLARR_URL"),
       prowlarrApiKey: setting(map, "prowlarrApiKey", "PROWLARR_API_KEY"),
+      prowlarrIndexerIds: parseIdList(
+        setting(map, "prowlarrIndexerIds", "PROWLARR_INDEXER_IDS", "")
+      ),
+      prowlarrCategories: parseIdList(
+        setting(map, "prowlarrCategories", "PROWLARR_CATEGORIES", "")
+      ),
       libraryRoot: setting(map, "libraryRoot", "BOOKARR_LIBRARY_ROOT", "/data/audiobooks"),
       qualityProfileId: Number(setting(map, "qualityProfileId", null, "1") || 1),
       autoSearchOnApprove: setting(map, "autoSearchOnApprove", null, "true") === "true",
@@ -715,6 +796,7 @@ export class LibraryService {
       ),
       downloadPollMs: Number(setting(map, "downloadPollMs", "BOOKARR_DOWNLOAD_POLL_MS", "3000") || 3000),
       mockDownloadMs: Number(setting(map, "mockDownloadMs", "BOOKARR_MOCK_DOWNLOAD_MS", "1500") || 1500),
+      logLevel: parseLogLevel(setting(map, "logLevel", "LOG_LEVEL", "info"), "info"),
     };
   }
 
@@ -734,6 +816,8 @@ export class LibraryService {
     const pairs: Array<[string, string]> = [
       ["prowlarrUrl", next.prowlarrUrl],
       ["prowlarrApiKey", next.prowlarrApiKey],
+      ["prowlarrIndexerIds", serializeIdList(next.prowlarrIndexerIds)],
+      ["prowlarrCategories", serializeIdList(next.prowlarrCategories)],
       ["libraryRoot", next.libraryRoot],
       ["qualityProfileId", String(next.qualityProfileId)],
       ["autoSearchOnApprove", String(next.autoSearchOnApprove)],
@@ -750,6 +834,7 @@ export class LibraryService {
       ["metadataCacheTtlHours", String(next.metadataCacheTtlHours)],
       ["downloadPollMs", String(next.downloadPollMs)],
       ["mockDownloadMs", String(next.mockDownloadMs)],
+      ["logLevel", next.logLevel],
     ];
     for (const [k, v] of pairs) set.run(k, v);
 
@@ -757,7 +842,10 @@ export class LibraryService {
     this.prowlarr.updateConfig(next.prowlarrUrl, next.prowlarrApiKey);
     this.clients.updateFromSettings(next);
     this.metadata?.updateFromSettings(next);
-    return this.getSettings();
+    log.setLevel(next.logLevel);
+    const saved = this.getSettings();
+    log.info("settings.saved", this.settingsSummary(saved));
+    return saved;
   }
 
   publicSettings() {

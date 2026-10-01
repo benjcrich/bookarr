@@ -1,4 +1,26 @@
 import type { AppSettings, ProwlarrIndexer, ProwlarrRelease } from "../domain/types.js";
+import { parseIdList } from "../domain/types.js";
+import { log } from "../log.js";
+
+export interface ProwlarrSearchOptions {
+  type?: string;
+  /** When non-empty, restrict search to these Prowlarr indexer IDs */
+  indexerIds?: number[];
+  /** When non-empty, restrict search to these Newznab/Torznab categories */
+  categories?: number[];
+}
+
+/** Build Prowlarr GET /api/v1/search query string (exported for tests). */
+export function buildProwlarrSearchQuery(query: string, opts: ProwlarrSearchOptions = {}): string {
+  const qs = new URLSearchParams();
+  qs.set("query", query);
+  qs.set("type", opts.type ?? "search");
+  const indexerIds = parseIdList(opts.indexerIds);
+  const categories = parseIdList(opts.categories);
+  for (const id of indexerIds) qs.append("indexerIds", String(id));
+  for (const id of categories) qs.append("categories", String(id));
+  return qs.toString();
+}
 
 export class ProwlarrClient {
   constructor(
@@ -56,16 +78,68 @@ export class ProwlarrClient {
     }
   }
 
-  async search(query: string, type = "search"): Promise<ProwlarrRelease[]> {
-    if (!this.configured) return mockSearch(query);
+  async search(query: string, opts: ProwlarrSearchOptions = {}): Promise<ProwlarrRelease[]> {
+    const indexerIds = parseIdList(opts.indexerIds);
+    const categories = parseIdList(opts.categories);
+    const filters = {
+      indexerIds: indexerIds.length ? indexerIds : "all",
+      categories: categories.length ? categories : "none",
+    };
+    if (!this.configured) {
+      const results = mockSearch(query, { indexerIds, categories });
+      log.info("prowlarr.search", {
+        mode: "mock",
+        query,
+        ...filters,
+        results: results.length,
+      });
+      return results;
+    }
     try {
-      const qs = new URLSearchParams({ query, type });
+      const qs = buildProwlarrSearchQuery(query, {
+        type: opts.type ?? "search",
+        indexerIds,
+        categories,
+      });
       const res = await this.request(`/api/v1/search?${qs}`);
-      if (!res.ok) return mockSearch(query);
+      if (!res.ok) {
+        log.warn("prowlarr.search.http_error", {
+          query,
+          ...filters,
+          status: res.status,
+        });
+        const results = mockSearch(query, { indexerIds, categories });
+        log.info("prowlarr.search", {
+          mode: "mock-fallback",
+          query,
+          ...filters,
+          results: results.length,
+        });
+        return results;
+      }
       const data = (await res.json()) as Array<Record<string, unknown>>;
-      return data.map(mapRelease);
-    } catch {
-      return mockSearch(query);
+      const results = data.map(mapRelease);
+      log.info("prowlarr.search", {
+        mode: "live",
+        query,
+        ...filters,
+        results: results.length,
+      });
+      return results;
+    } catch (err) {
+      log.warn("prowlarr.search.error", {
+        query,
+        ...filters,
+        error: (err as Error).message,
+      });
+      const results = mockSearch(query, { indexerIds, categories });
+      log.info("prowlarr.search", {
+        mode: "mock-fallback",
+        query,
+        ...filters,
+        results: results.length,
+      });
+      return results;
     }
   }
 
@@ -79,6 +153,11 @@ export class ProwlarrClient {
     detail: string;
   }> {
     if (!this.configured) {
+      log.info("prowlarr.grab", {
+        mode: "mock",
+        indexerId: release.indexerId,
+        guid: release.guid,
+      });
       return {
         accepted: true,
         mode: "mock",
@@ -92,14 +171,28 @@ export class ProwlarrClient {
       });
       if (!res.ok) {
         const text = await res.text();
+        log.warn("prowlarr.grab.failed", {
+          indexerId: release.indexerId,
+          status: res.status,
+          detail: text.slice(0, 200),
+        });
         return {
           accepted: false,
           mode: "live",
           detail: `Prowlarr grab failed: HTTP ${res.status} ${text}`,
         };
       }
+      log.info("prowlarr.grab", {
+        mode: "live",
+        indexerId: release.indexerId,
+        guid: release.guid,
+      });
       return { accepted: true, mode: "live", detail: "Release sent via Prowlarr." };
     } catch (err) {
+      log.warn("prowlarr.grab.unreachable", {
+        indexerId: release.indexerId,
+        error: (err as Error).message,
+      });
       return {
         accepted: true,
         mode: "mock",
@@ -140,12 +233,16 @@ function mockIndexers(): ProwlarrIndexer[] {
   return [
     { id: 1, name: "Mock Audiobook Tracker", protocol: "torrent", enable: true, priority: 10 },
     { id: 2, name: "Mock Usenet Books", protocol: "usenet", enable: true, priority: 20 },
+    { id: 3, name: "Mock General Indexer", protocol: "torrent", enable: true, priority: 30 },
   ];
 }
 
-function mockSearch(query: string): ProwlarrRelease[] {
+function mockSearch(
+  query: string,
+  filters: { indexerIds: number[]; categories: number[] }
+): ProwlarrRelease[] {
   const q = query.trim() || "audiobook";
-  return [
+  let results: ProwlarrRelease[] = [
     {
       guid: `mock-m4b-${slug(q)}`,
       title: `${q} [M4B] [64kbps] [Mock]`,
@@ -168,7 +265,32 @@ function mockSearch(query: string): ProwlarrRelease[] {
       publishDate: new Date().toISOString(),
       downloadUrl: `https://example.invalid/nzb/${encodeURIComponent(q)}.nzb`,
     },
+    {
+      guid: `mock-ebook-${slug(q)}`,
+      title: `${q} EPUB Mock (not audiobook)`,
+      size: 2_000_000,
+      indexerId: 3,
+      indexer: "Mock General Indexer",
+      protocol: "torrent",
+      publishDate: new Date().toISOString(),
+      downloadUrl: `https://example.invalid/download/${encodeURIComponent(q)}.epub.torrent`,
+      seeders: 50,
+      leechers: 2,
+    },
   ];
+  if (filters.indexerIds.length > 0) {
+    const allow = new Set(filters.indexerIds);
+    results = results.filter((r) => allow.has(r.indexerId));
+  }
+  // Categories are applied server-side by live Prowlarr; for mock, treat 3030 as audiobook-only
+  if (filters.categories.length > 0) {
+    const audiobookCats = new Set([3030, 7020]);
+    const wantsAudiobook = filters.categories.some((c) => audiobookCats.has(c));
+    if (wantsAudiobook) {
+      results = results.filter((r) => r.indexerId === 1 || r.indexerId === 2);
+    }
+  }
+  return results;
 }
 
 function slug(s: string): string {
