@@ -196,6 +196,12 @@ export async function registerRoutes(
   app.get("/api/settings", async () => library.publicSettings());
 
   app.put("/api/settings", async (req) => {
+    const secretKeys = [
+      "prowlarrApiKey",
+      "qbittorrentPassword",
+      "sabnzbdApiKey",
+      "hardcoverApiKey",
+    ] as const;
     const body = z
       .object({
         prowlarrUrl: z.string().optional(),
@@ -214,16 +220,33 @@ export async function registerRoutes(
         metadataMode: z.enum(["mock", "auto"]).optional(),
         hardcoverApiKey: z.string().optional(),
         metadataCacheTtlHours: z.number().int().positive().optional(),
+        downloadPollMs: z.number().int().positive().optional(),
+        mockDownloadMs: z.number().int().positive().optional(),
+        clearSecrets: z.array(z.enum(secretKeys)).optional(),
       })
       .parse(req.body);
 
-    const patch = { ...body } as Record<string, unknown>;
-    for (const secret of ["prowlarrApiKey", "qbittorrentPassword", "sabnzbdApiKey", "hardcoverApiKey"]) {
+    const { clearSecrets, ...rest } = body;
+    const patch = { ...rest } as Record<string, unknown>;
+    for (const secret of secretKeys) {
       if (patch[secret] === "••••••••") delete patch[secret];
-      if (typeof patch[secret] === "string" && !(patch[secret] as string).trim()) delete patch[secret];
+      // Empty string without clearSecrets means "keep existing"
+      if (typeof patch[secret] === "string" && !(patch[secret] as string).trim()) {
+        delete patch[secret];
+      }
     }
 
-    library.updateSettings(patch);
+    library.updateSettings(patch, { clearSecrets });
     return library.publicSettings();
+  });
+
+  app.post("/api/settings/test", async () => {
+    const settings = library.getSettings();
+    const [prowlarrHealth, downloadClients, meta] = await Promise.all([
+      prowlarr.health(),
+      clients.health(settings),
+      metadata.health(settings),
+    ]);
+    return { prowlarr: prowlarrHealth, downloadClients, metadata: meta };
   });
 }

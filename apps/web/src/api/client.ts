@@ -1,5 +1,10 @@
 export type BookStatus = "wanted" | "monitored" | "downloading" | "available" | "missing";
 export type RequestStatus = "pending" | "approved" | "denied";
+export type SecretSettingKey =
+  | "prowlarrApiKey"
+  | "qbittorrentPassword"
+  | "sabnzbdApiKey"
+  | "hardcoverApiKey";
 
 export interface Audiobook {
   id: number;
@@ -96,6 +101,7 @@ export interface PublicSettings {
   prowlarrUrl: string;
   prowlarrApiKeySet: boolean;
   libraryRoot: string;
+  qualityProfileId: number;
   autoSearchOnApprove: boolean;
   downloadClientMode: "mock" | "auto";
   qbittorrentUrl: string;
@@ -108,6 +114,16 @@ export interface PublicSettings {
   metadataMode: "mock" | "auto";
   hardcoverApiKeySet: boolean;
   metadataCacheTtlHours: number;
+  downloadPollMs: number;
+  mockDownloadMs: number;
+  precedence?: string;
+  note?: string;
+}
+
+export interface SettingsTestResult {
+  prowlarr: { mode: string; detail: string; ok?: boolean };
+  downloadClients: DownloadClientsHealth;
+  metadata: { mode: string; openLibrary: string; hardcover: string };
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -201,4 +217,6 @@ export const bookarrApi = {
   settings: () => api<PublicSettings>("/api/settings"),
   updateSettings: (body: Record<string, unknown>) =>
     api<PublicSettings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
+  testSettings: () =>
+    api<SettingsTestResult>("/api/settings/test", { method: "POST", body: "{}" }),
 };

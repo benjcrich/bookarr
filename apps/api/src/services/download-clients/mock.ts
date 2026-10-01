@@ -16,9 +16,14 @@ interface MockItem {
  */
 export class MockDownloadClient implements DownloadClientAdapter {
   readonly kind = "mock" as const;
+  private durationMs = Number(process.env.BOOKARR_MOCK_DOWNLOAD_MS || 1500);
+  private items = new Map<string, MockItem>();
+
   constructor(readonly protocol: "torrent" | "usenet") {}
 
-  private items = new Map<string, MockItem>();
+  setDurationMs(ms: number): void {
+    if (Number.isFinite(ms) && ms > 0) this.durationMs = ms;
+  }
 
   async health() {
     return { ok: true, mode: "mock" as const, detail: `Mock ${this.protocol} client ready.` };
@@ -30,7 +35,7 @@ export class MockDownloadClient implements DownloadClientAdapter {
     this.items.set(externalId, {
       title: input.title,
       createdAt: Date.now(),
-      durationMs: Number(process.env.BOOKARR_MOCK_DOWNLOAD_MS || 1500),
+      durationMs: this.durationMs,
       outputPath: `/downloads/mock/${safe}`,
     });
     return {
