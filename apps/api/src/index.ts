@@ -37,11 +37,8 @@ async function main() {
   const metadata = new MetadataService(db, settings);
   library.setMetadataService(metadata);
 
-  // Quiet by default: no per-request access spam. Debug enables HTTP access lines.
-  const app = Fastify({
-    logger: false,
-    disableRequestLogging: true,
-  });
+  // Quiet by default: no Fastify logger (no access spam). We emit sparse HTTP lines ourselves.
+  const app = Fastify({ logger: false });
   await app.register(cors, { origin: true });
 
   app.addHook("onResponse", async (req, reply) => {
