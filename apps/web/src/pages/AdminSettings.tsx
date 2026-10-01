@@ -131,6 +131,10 @@ export function AdminSettings() {
         logLevel: form.logLevel,
         downloadRetryMaxAttempts: form.downloadRetryMaxAttempts,
         downloadRetryBaseDelayMs: form.downloadRetryBaseDelayMs,
+        remotePathMappings: (form.remotePathMappings ?? []).filter(
+          (m) => m.remote?.trim() && m.local?.trim()
+        ),
+        importMode: form.importMode ?? "auto",
       };
       if (form.prowlarrApiKey?.trim()) body.prowlarrApiKey = form.prowlarrApiKey.trim();
       if (form.qbittorrentPassword?.trim()) body.qbittorrentPassword = form.qbittorrentPassword.trim();
@@ -313,6 +317,18 @@ export function AdminSettings() {
               />
             </label>
             <label>
+              Import mode
+              <select
+                value={form.importMode ?? "auto"}
+                onChange={(e) => set("importMode", e.target.value)}
+              >
+                <option value="auto">auto (hardlink, else copy)</option>
+                <option value="copy">copy</option>
+                <option value="hardlink">hardlink (fallback copy)</option>
+                <option value="move">move</option>
+              </select>
+            </label>
+            <label>
               Default quality profile ID
               <input
                 type="number"
@@ -329,6 +345,68 @@ export function AdminSettings() {
               />
               Auto-search & grab on request approve
             </label>
+          </div>
+          <div className="form-grid" style={{ paddingTop: 0 }}>
+            <div>
+              <div className="meta" style={{ marginBottom: "0.5rem" }}>
+                Remote path mappings — rewrite paths reported by qBittorrent/SABnzbd to paths
+                inside this container. Mount the client&apos;s download folder (e.g.{" "}
+                <code>/downloads</code>) in compose, then map the client prefix → container path.
+              </div>
+              {(form.remotePathMappings ?? []).map((m, idx) => (
+                <div className="form-grid two" key={idx} style={{ padding: "0.35rem 0" }}>
+                  <label>
+                    Client path (remote)
+                    <input
+                      value={m.remote}
+                      onChange={(e) => {
+                        const next = [...(form.remotePathMappings ?? [])];
+                        next[idx] = { ...next[idx], remote: e.target.value };
+                        set("remotePathMappings", next);
+                      }}
+                      placeholder="/downloads"
+                    />
+                  </label>
+                  <label>
+                    Container path (local)
+                    <input
+                      value={m.local}
+                      onChange={(e) => {
+                        const next = [...(form.remotePathMappings ?? [])];
+                        next[idx] = { ...next[idx], local: e.target.value };
+                        set("remotePathMappings", next);
+                      }}
+                      placeholder="/downloads"
+                    />
+                  </label>
+                  <div>
+                    <button
+                      className="btn danger"
+                      type="button"
+                      onClick={() => {
+                        const next = [...(form.remotePathMappings ?? [])];
+                        next.splice(idx, 1);
+                        set("remotePathMappings", next);
+                      }}
+                    >
+                      Remove mapping
+                    </button>
+                  </div>
+                </div>
+              ))}
+              <button
+                className="btn"
+                type="button"
+                onClick={() =>
+                  set("remotePathMappings", [
+                    ...(form.remotePathMappings ?? []),
+                    { remote: "/downloads", local: "/downloads" },
+                  ])
+                }
+              >
+                Add path mapping
+              </button>
+            </div>
           </div>
         </div>
 

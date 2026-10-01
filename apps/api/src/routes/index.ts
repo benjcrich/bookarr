@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { parseIdList } from "../domain/types.js";
+import { parsePathMappings } from "../services/importer.js";
 import type { DownloadClientRegistry } from "../services/download-clients/index.js";
 import type { LibraryService } from "../services/library.js";
 import type { MetadataService } from "../services/metadata/index.js";
@@ -239,17 +240,28 @@ export async function registerRoutes(
         logLevel: z.enum(["debug", "info", "warn", "error"]).optional(),
         downloadRetryMaxAttempts: z.number().int().positive().max(50).optional(),
         downloadRetryBaseDelayMs: z.number().int().positive().optional(),
+        remotePathMappings: z
+          .union([
+            z.array(z.object({ remote: z.string(), local: z.string() })),
+            z.string(),
+          ])
+          .optional(),
+        importMode: z.enum(["auto", "copy", "hardlink", "move"]).optional(),
         clearSecrets: z.array(z.enum(secretKeys)).optional(),
       })
       .parse(req.body);
 
-    const { clearSecrets, prowlarrIndexerIds, prowlarrCategories, ...rest } = body;
+    const { clearSecrets, prowlarrIndexerIds, prowlarrCategories, remotePathMappings, ...rest } =
+      body;
     const patch = { ...rest } as Record<string, unknown>;
     if (prowlarrIndexerIds !== undefined) {
       patch.prowlarrIndexerIds = parseIdList(prowlarrIndexerIds);
     }
     if (prowlarrCategories !== undefined) {
       patch.prowlarrCategories = parseIdList(prowlarrCategories);
+    }
+    if (remotePathMappings !== undefined) {
+      patch.remotePathMappings = parsePathMappings(remotePathMappings);
     }
     for (const secret of secretKeys) {
       if (patch[secret] === "••••••••") delete patch[secret];

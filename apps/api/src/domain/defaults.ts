@@ -26,6 +26,8 @@ export function defaultSettings(overrides: Partial<AppSettings> = {}): AppSettin
     logLevel: "info",
     downloadRetryMaxAttempts: 5,
     downloadRetryBaseDelayMs: 10_000,
+    remotePathMappings: [],
+    importMode: "auto",
     ...overrides,
   };
 }

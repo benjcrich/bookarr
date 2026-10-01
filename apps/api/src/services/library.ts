@@ -12,7 +12,12 @@ import type {
 import { parseIdList, serializeIdList } from "../domain/types.js";
 import { log, parseLogLevel } from "../log.js";
 import type { DownloadClientRegistry } from "./download-clients/index.js";
-import { importCompletedDownload } from "./importer.js";
+import {
+  importCompletedDownload,
+  parsePathMappings,
+  serializePathMappings,
+} from "./importer.js";
+import type { ImportMode } from "../domain/types.js";
 import type { MetadataService } from "./metadata/index.js";
 import type { ProwlarrClient } from "./prowlarr.js";
 
@@ -99,7 +104,11 @@ export function isRetryableDownloadError(error: string | null | undefined, job: 
   if (!job.downloadUrl && !job.outputPath) return false;
   if (/\b(404|not found|gone|invalid guid|unsupported protocol)\b/.test(msg)) return false;
   // Explicitly retry permission / client / network / import issues
-  if (/\b(eacces|eperm|permission denied|econnrefused|etimedout|enotfound|socket|timeout|unavailable|ehostunreach|library path|import)\b/.test(msg)) {
+  if (
+    /\b(eacces|eperm|permission denied|econnrefused|etimedout|enotfound|socket|timeout|unavailable|ehostunreach|library path|import failed|source not visible|no audio files|path mapping)\b/.test(
+      msg
+    )
+  ) {
     return true;
   }
   // Default: retry (client briefly down, mock glitches, etc.)
@@ -109,6 +118,12 @@ export function isRetryableDownloadError(error: string | null | undefined, job: 
 function retryBackoffMs(baseMs: number, attempts: number): number {
   const exp = Math.max(0, attempts - 1);
   return Math.min(baseMs * 2 ** exp, 5 * 60_000);
+}
+
+function parseImportMode(value: string): ImportMode {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "copy" || v === "hardlink" || v === "move" || v === "auto") return v;
+  return "auto";
 }
 
 /**
@@ -475,6 +490,8 @@ export class LibraryService {
       logLevel: s.logLevel,
       downloadRetryMaxAttempts: s.downloadRetryMaxAttempts,
       downloadRetryBaseDelayMs: s.downloadRetryBaseDelayMs,
+      remotePathMappings: s.remotePathMappings,
+      importMode: s.importMode,
     };
   }
 
@@ -714,10 +731,10 @@ export class LibraryService {
       manual,
     });
 
-    // Import-only retry when we already have an output path (e.g. EACCES on library mkdir)
+    // Import-only retry when we already have an output path (permissions / mapping / copy glitches)
     const importish =
       Boolean(job.outputPath) &&
-      /\b(eacces|eperm|permission denied|library path|import|could not create)\b/i.test(
+      /\b(eacces|eperm|permission denied|library path|import failed|could not create|source not visible|no audio files|path mapping|transferring)\b/i.test(
         job.error ?? ""
       );
 
@@ -888,13 +905,17 @@ export class LibraryService {
       title: job.title,
       authorName,
       outputPath,
+      pathMappings: settings.remotePathMappings,
+      importMode: settings.importMode,
     });
 
     log.info("download.import", {
       jobId: job.id,
       ok: imported.ok,
-      stub: imported.stub,
       importPath: imported.importPath,
+      sourcePath: imported.sourcePath ?? outputPath,
+      mode: imported.mode ?? null,
+      files: imported.files?.length ?? 0,
       detail: imported.detail,
     });
 
@@ -906,11 +927,11 @@ export class LibraryService {
     this.db
       .prepare(
         `UPDATE download_jobs SET
-          status = 'imported', import_path = ?, error = ?, next_retry_at = NULL,
+          status = 'imported', import_path = ?, error = NULL, next_retry_at = NULL,
           updated_at = datetime('now')
          WHERE id = ?`
       )
-      .run(imported.importPath, imported.stub ? imported.detail : null, job.id);
+      .run(imported.importPath, job.id);
 
     if (job.audiobookId) {
       this.updateBookFlags(job.audiobookId, {
@@ -950,6 +971,8 @@ export class LibraryService {
       ["logLevel", process.env.LOG_LEVEL],
       ["downloadRetryMaxAttempts", process.env.BOOKARR_DOWNLOAD_RETRY_MAX],
       ["downloadRetryBaseDelayMs", process.env.BOOKARR_DOWNLOAD_RETRY_BASE_MS],
+      ["remotePathMappings", process.env.BOOKARR_REMOTE_PATH_MAPPINGS],
+      ["importMode", process.env.BOOKARR_IMPORT_MODE],
     ];
     for (const [key, value] of pairs) {
       if (value != null && String(value).trim() !== "") insert.run(key, String(value));
@@ -971,6 +994,8 @@ export class LibraryService {
     insert.run("logLevel", "info");
     insert.run("downloadRetryMaxAttempts", "5");
     insert.run("downloadRetryBaseDelayMs", "10000");
+    insert.run("remotePathMappings", "[]");
+    insert.run("importMode", "auto");
   }
 
   getSettings(): AppSettings {
@@ -1012,6 +1037,10 @@ export class LibraryService {
       downloadRetryBaseDelayMs: Number(
         setting(map, "downloadRetryBaseDelayMs", "BOOKARR_DOWNLOAD_RETRY_BASE_MS", "10000") || 10000
       ),
+      remotePathMappings: parsePathMappings(
+        setting(map, "remotePathMappings", "BOOKARR_REMOTE_PATH_MAPPINGS", "[]")
+      ),
+      importMode: parseImportMode(setting(map, "importMode", "BOOKARR_IMPORT_MODE", "auto")),
     };
   }
 
@@ -1052,6 +1081,8 @@ export class LibraryService {
       ["logLevel", next.logLevel],
       ["downloadRetryMaxAttempts", String(next.downloadRetryMaxAttempts)],
       ["downloadRetryBaseDelayMs", String(next.downloadRetryBaseDelayMs)],
+      ["remotePathMappings", serializePathMappings(next.remotePathMappings)],
+      ["importMode", next.importMode],
     ];
     for (const [k, v] of pairs) set.run(k, v);
 

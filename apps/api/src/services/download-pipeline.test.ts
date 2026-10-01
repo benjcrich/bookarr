@@ -99,18 +99,45 @@ describe("download pipeline (mock clients)", () => {
     assert.match(job.externalId!, /^mock-usenet-/);
   });
 
-  it("import stub reserves library path when source missing", () => {
+  it("import fails (not stub-success) when source missing", () => {
     const root = path.join(tmp, "lib2");
     const result = importCompletedDownload({
       libraryRoot: root,
       book: null,
-      title: "Stub Title",
-      authorName: "Stub Author",
+      title: "Missing Title",
+      authorName: "Missing Author",
       outputPath: "/nonexistent/path",
     });
-    assert.equal(result.ok, true);
-    assert.equal(result.stub, true);
-    assert.ok(result.importPath);
-    assert.ok(fs.existsSync(path.join(result.importPath!, ".bookarr-imported")));
+    assert.equal(result.ok, false);
+    assert.equal(result.stub, false);
+    assert.equal(result.importPath, null);
+    assert.match(result.detail, /source not visible|Import failed/i);
+  });
+
+  it("imports real audio files from mock client output", async () => {
+    const book = library.upsertAudiobook({
+      title: "Real Import",
+      authorName: "Import Author",
+      wanted: true,
+    });
+    const job = await library.enqueueGrab({
+      audiobookId: book.id,
+      release: {
+        guid: "real-import-1",
+        title: "Real Import [MP3]",
+        indexerId: 1,
+        indexer: "Mock",
+        protocol: "torrent",
+        size: 1000,
+        downloadUrl: "https://example.invalid/real.torrent",
+      },
+    });
+    clients.getMockTorrent().completeNow(job.externalId!);
+    await library.pollDownloads();
+    const done = library.getDownload(job.id)!;
+    assert.equal(done.status, "imported");
+    assert.ok(done.importPath);
+    const files = fs.readdirSync(done.importPath!);
+    assert.ok(files.some((f) => f.endsWith(".mp3")), `expected mp3 in ${files.join(",")}`);
   });
 });

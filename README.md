@@ -59,6 +59,21 @@ If you bind-mount a host library (`/path/on/host:/data/audiobooks`), either:
 
 On `EACCES` during import, logs and the job error include a short ownership hint; failed jobs auto-retry with backoff and can be **Retry**’d from Admin → Downloads after fixing permissions.
 
+### Real imports + remote path mappings
+
+When a download completes, Bookarr resolves the client’s content/save path, applies **Remote path mappings** (Admin → Settings), then hardlinks or copies audio files into `Author/Title/` under the library root.
+
+1. Mount the download client’s completed folder into the Bookarr container (same host path both containers see), e.g. in compose:
+   ```yaml
+   volumes:
+     - bookarr-data:/data
+     - /path/on/host/downloads:/downloads
+   ```
+2. In Admin → Settings → Library, add a mapping: **Client path** = path qBittorrent/SABnzbd reports (e.g. `/downloads`), **Container path** = `/downloads`.
+3. Choose **Import mode**: `auto` (hardlink, else copy), `copy`, `hardlink`, or `move`.
+
+If the source is still missing after mapping, the job **fails** (retry-eligible) with an actionable error — it no longer pretends success with an empty “stub” folder. Logs: `download.import.start` / `.success` / `.fail` with source and dest.
+
 ### GHCR visibility (one-time)
 
 After the first successful publish workflow on `main`:

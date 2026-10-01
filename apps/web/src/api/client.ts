@@ -123,6 +123,8 @@ export interface PublicSettings {
   logLevel: "debug" | "info" | "warn" | "error";
   downloadRetryMaxAttempts: number;
   downloadRetryBaseDelayMs: number;
+  remotePathMappings: Array<{ remote: string; local: string }>;
+  importMode: "auto" | "copy" | "hardlink" | "move";
   precedence?: string;
   note?: string;
 }

@@ -107,6 +107,15 @@ export type SecretSettingKey =
   | "sabnzbdApiKey"
   | "hardcoverApiKey";
 
+/** Map a path reported by qBittorrent/SABnzbd to a path visible inside Bookarr. */
+export interface RemotePathMapping {
+  remote: string;
+  local: string;
+}
+
+/** How to place completed files into the library. auto = hardlink then copy. */
+export type ImportMode = "auto" | "copy" | "hardlink" | "move";
+
 export interface AppSettings {
   prowlarrUrl: string;
   prowlarrApiKey: string;
@@ -146,6 +155,10 @@ export interface AppSettings {
   downloadRetryMaxAttempts: number;
   /** Base backoff delay for auto-retries (ms); doubles each attempt, capped */
   downloadRetryBaseDelayMs: number;
+  /** Client path prefix → container path (like *arr remote path mappings) */
+  remotePathMappings: RemotePathMapping[];
+  /** Import transfer mode */
+  importMode: ImportMode;
 }
 
 /** Parse comma/space/JSON list of positive ints from settings/env/UI. */

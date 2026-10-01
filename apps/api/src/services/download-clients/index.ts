@@ -38,6 +38,10 @@ export class DownloadClientRegistry {
     });
     this.mockTorrent.setDurationMs(settings.mockDownloadMs);
     this.mockUsenet.setDurationMs(settings.mockDownloadMs);
+    if (process.env.BOOKARR_MOCK_DOWNLOAD_ROOT) {
+      this.mockTorrent.setOutputRoot(process.env.BOOKARR_MOCK_DOWNLOAD_ROOT);
+      this.mockUsenet.setOutputRoot(process.env.BOOKARR_MOCK_DOWNLOAD_ROOT);
+    }
   }
 
   forProtocol(protocol: string, mode: "mock" | "auto"): DownloadClientAdapter {

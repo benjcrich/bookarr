@@ -40,8 +40,11 @@ services:
       # SQLite DB lives under /data; library imports under /data/audiobooks
       # Entrypoint chowns /data for PUID/PGID on start (does not wipe existing DB).
       - bookarr-data:/data
+      # Required for real imports: mount the same download folder qBittorrent/SABnzbd writes to.
+      # Then set Admin → Settings → Remote path mappings (client path → this container path).
+      # Example (adjust host path to your download client's completed folder):
+      # - /path/on/host/downloads:/downloads
       # Optional: bind-mount a host library path instead of the named volume subpath.
-      # Ensure the host path is owned by PUID:PGID (or let entrypoint chown the mount root).
       # - /path/on/host/audiobooks:/data/audiobooks
     restart: unless-stopped
     healthcheck:

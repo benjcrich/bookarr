@@ -89,14 +89,15 @@ describe("download job retries", () => {
     assert.ok(failed.nextRetryAt, "expected next_retry_at");
     assert.equal(failed.attempts, 1);
 
-    // Create writable library and import-source stub dir, then manual retry (import-only path)
+    // Create writable library + real audio at the recorded output path, then retry import
     fs.mkdirSync(path.join(tmp, "library"), { recursive: true });
     fs.mkdirSync(path.join(tmp, "src-out"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, "src-out", "book.mp3"), "audio");
     const retried = await library.retryDownload(job.id, { manual: true });
     assert.ok(retried);
     assert.equal(retried!.attempts, 2);
-    // Stub import should succeed (ok with stub) once mkdir works
     assert.equal(retried!.status, "imported");
+    assert.ok(fs.existsSync(path.join(retried!.importPath!, "book.mp3")));
   });
 
   it("poll picks up due auto-retries", async () => {
