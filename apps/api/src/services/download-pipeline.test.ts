@@ -14,26 +14,31 @@ describe("download pipeline (mock clients)", () => {
   let tmp: string;
   let library: LibraryService;
   let clients: DownloadClientRegistry;
+  let libraryRoot: string;
 
   before(() => {
     process.env.DOWNLOAD_CLIENT_MODE = "mock";
     process.env.BOOKARR_MOCK_DOWNLOAD_MS = "50";
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bookarr-test-"));
+    libraryRoot = path.join(tmp, "library");
+    fs.mkdirSync(libraryRoot, { recursive: true });
     const db = openDatabase(path.join(tmp, "test.db"));
     const prowlarr = new ProwlarrClient("", "");
     clients = new DownloadClientRegistry(
       defaultSettings({
-        libraryRoot: path.join(tmp, "library"),
+        libraryRoot,
         autoSearchOnApprove: false,
         metadataMode: "mock",
         mockDownloadMs: 50,
+        importMode: "libraryDirect",
       })
     );
     library = new LibraryService(db, prowlarr, clients);
     library.updateSettings({
-      libraryRoot: path.join(tmp, "library"),
+      libraryRoot,
       downloadClientMode: "mock",
       mockDownloadMs: 50,
+      importMode: "libraryDirect",
     });
   });
 
@@ -41,7 +46,7 @@ describe("download pipeline (mock clients)", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("sends grab to mock torrent client and imports on completion", async () => {
+  it("sends grab to mock torrent client and marks available library-direct", async () => {
     const book = library.upsertAudiobook({
       title: "Pipeline Test",
       authorName: "Test Author",
@@ -66,7 +71,6 @@ describe("download pipeline (mock clients)", () => {
     assert.equal(job.client, "mock");
     assert.ok(job.externalId);
 
-    // Force mock completion
     clients.getMockTorrent().completeNow(job.externalId!);
 
     const polled = await library.pollDownloads();
@@ -75,7 +79,8 @@ describe("download pipeline (mock clients)", () => {
     const done = library.getDownload(job.id)!;
     assert.equal(done.status, "imported");
     assert.ok(done.importPath);
-    assert.ok(fs.existsSync(path.join(done.importPath!, ".bookarr-imported")));
+    assert.ok(fs.existsSync(path.join(done.importPath!, "chapter-01.mp3")));
+    assert.equal(fs.existsSync(path.join(done.importPath!, ".bookarr-imported")), false);
 
     const updatedBook = library.getBook(book.id)!;
     assert.equal(updatedBook.status, "available");
@@ -99,18 +104,40 @@ describe("download pipeline (mock clients)", () => {
     assert.match(job.externalId!, /^mock-usenet-/);
   });
 
-  it("import stub reserves library path when source missing", () => {
+  it("library-direct fails when client path is missing (no stub folder)", () => {
     const root = path.join(tmp, "lib2");
+    fs.mkdirSync(root, { recursive: true });
     const result = importCompletedDownload({
       libraryRoot: root,
       book: null,
-      title: "Stub Title",
-      authorName: "Stub Author",
+      title: "Missing Title",
+      authorName: "Missing Author",
       outputPath: "/nonexistent/path",
+      importMode: "libraryDirect",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.stub, false);
+    assert.equal(result.importPath, null);
+    assert.match(result.detail, /not visible|Library-direct/i);
+    assert.equal(fs.existsSync(path.join(root, "Missing Author")), false);
+  });
+
+  it("library-direct succeeds when audio already in place", () => {
+    const root = path.join(tmp, "lib3");
+    const dest = path.join(root, "Author", "Title");
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, "book.m4b"), Buffer.from("audio"));
+    const result = importCompletedDownload({
+      libraryRoot: root,
+      book: null,
+      title: "Title",
+      authorName: "Author",
+      outputPath: dest,
+      importMode: "libraryDirect",
     });
     assert.equal(result.ok, true);
-    assert.equal(result.stub, true);
-    assert.ok(result.importPath);
-    assert.ok(fs.existsSync(path.join(result.importPath!, ".bookarr-imported")));
+    assert.equal(result.importPath, dest);
+    assert.equal(result.stub, false);
+    assert.ok(result.files?.includes("book.m4b"));
   });
 });

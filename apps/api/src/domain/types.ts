@@ -107,6 +107,12 @@ export type SecretSettingKey =
   | "sabnzbdApiKey"
   | "hardcoverApiKey";
 
+/**
+ * How Bookarr treats a completed download.
+ * `libraryDirect` — client (e.g. qBit) saves into the library; Bookarr only marks available (no copy/move/stub).
+ */
+export type ImportMode = "libraryDirect";
+
 export interface AppSettings {
   prowlarrUrl: string;
   prowlarrApiKey: string;
@@ -146,6 +152,8 @@ export interface AppSettings {
   downloadRetryMaxAttempts: number;
   /** Base backoff delay for auto-retries (ms); doubles each attempt, capped */
   downloadRetryBaseDelayMs: number;
+  /** Completion handling — libraryDirect = client saves into library (no file relocate) */
+  importMode: ImportMode;
 }
 
 /** Parse comma/space/JSON list of positive ints from settings/env/UI. */

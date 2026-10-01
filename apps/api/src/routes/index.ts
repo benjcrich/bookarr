@@ -239,6 +239,7 @@ export async function registerRoutes(
         logLevel: z.enum(["debug", "info", "warn", "error"]).optional(),
         downloadRetryMaxAttempts: z.number().int().positive().max(50).optional(),
         downloadRetryBaseDelayMs: z.number().int().positive().optional(),
+        importMode: z.enum(["libraryDirect"]).optional(),
         clearSecrets: z.array(z.enum(secretKeys)).optional(),
       })
       .parse(req.body);

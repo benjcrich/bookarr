@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AppSettings } from "../../domain/types.js";
 import { MockDownloadClient } from "./mock.js";
 import { QBittorrentClient } from "./qbittorrent.js";
@@ -22,6 +23,7 @@ export class DownloadClientRegistry {
       apiKey: settings.sabnzbdApiKey,
       category: settings.sabnzbdCategory,
     });
+    this.updateFromSettings(settings);
   }
 
   updateFromSettings(settings: AppSettings): void {
@@ -38,6 +40,11 @@ export class DownloadClientRegistry {
     });
     this.mockTorrent.setDurationMs(settings.mockDownloadMs);
     this.mockUsenet.setDurationMs(settings.mockDownloadMs);
+    // Prefer writing mock completions into the library root (library-direct workflow)
+    const mockRoot =
+      process.env.BOOKARR_MOCK_DOWNLOAD_ROOT || path.join(settings.libraryRoot, "_mock-downloads");
+    this.mockTorrent.setOutputRoot(mockRoot);
+    this.mockUsenet.setOutputRoot(mockRoot);
   }
 
   forProtocol(protocol: string, mode: "mock" | "auto"): DownloadClientAdapter {

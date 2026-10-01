@@ -57,7 +57,7 @@ If you bind-mount a host library (`/path/on/host:/data/audiobooks`), either:
 1. `chown -R 1000:1000 /path/on/host` (or your `PUID:PGID`), or  
 2. Set `PUID`/`PGID` in `.env` to the host directory owner.
 
-On `EACCES` during import, logs and the job error include a short ownership hint; failed jobs auto-retry with backoff and can be **Retry**’d from Admin → Downloads after fixing permissions.
+Failed library-direct jobs (path not visible / no audio yet) auto-retry with backoff and can be **Retry**’d from Admin → Downloads. Ensure Bookarr and qBit/SAB share the same library mount and `PUID`/`PGID` can read it.
 
 ### GHCR visibility (one-time)
 
@@ -115,7 +115,7 @@ Secrets in `GET /api/settings` are masked (`••••••••` + `*Set` f
 
 ### Editable in Admin → Settings (persisted)
 
-Prowlarr URL/API key · **Prowlarr search indexer IDs** · **Prowlarr categories** · download client mode · qBittorrent · SABnzbd · library root · quality profile id · auto-search on approve · metadata mode · Hardcover key · metadata cache TTL · download poll ms · mock download ms · log level.
+Prowlarr URL/API key · **Prowlarr search indexer IDs** · **Prowlarr categories** · download client mode · qBittorrent · SABnzbd · library root · **import mode (library-direct)** · quality profile id · auto-search on approve · metadata mode · Hardcover key · metadata cache TTL · download poll ms · mock download ms · log level.
 
 ## Audiobook-only Prowlarr search
 
@@ -135,7 +135,7 @@ INFO  bookarr.started host=0.0.0.0 port=8787 logLevel=info
 INFO  bookarr.config prowlarrUrl=http://prowlarr:9696 prowlarrIndexerIds=[1] prowlarrCategories=[3030] ...
 INFO  prowlarr.search mode=live query=Mistborn indexerIds=[1] categories=[3030] results=12
 INFO  download.enqueue jobId=3 title=... client=mock
-INFO  download.import jobId=3 ok=true stub=true importPath=...
+INFO  download.import jobId=3 ok=true mode=libraryDirect importPath=...
 ```
 
 | Level | Behavior |
@@ -166,7 +166,7 @@ Optional bootstrap env (`PROWLARR_*`, `QBITTORRENT_*`, `SABNZBD_*`, `METADATA_*`
 
 Protocol routing: `torrent` → qBittorrent (or mock); `usenet` → SABnzbd (or mock).
 
-On completion Bookarr runs an import hook under the configured library root as `Author/Title/`. If the client output path is not readable locally, it **stubs** gracefully (creates the folder + `.bookarr-imported` marker).
+**Library-direct completion (default):** configure qBittorrent / SABnzbd so the Bookarr category (or default save path) writes **into the same library mount** Bookarr uses (`BOOKARR_LIBRARY_ROOT`, typically `/data/audiobooks`). When the client reports complete, Bookarr verifies audio files at the client’s content/save path and marks the job **imported** / book **available** — it does **not** copy, move, or create empty Author/Title stub folders. If the path is not visible or has no audio yet, the job fails with a clear error and can retry.
 
 ## Environment variables
 
@@ -183,7 +183,8 @@ On completion Bookarr runs an import hook under the configured library root as `
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BOOKARR_LIBRARY_ROOT` | `/data/audiobooks` | Import root |
+| `BOOKARR_LIBRARY_ROOT` | `/data/audiobooks` | Library root (same mount clients should save into) |
+| `BOOKARR_IMPORT_MODE` | `libraryDirect` | Completion mode (`libraryDirect` / aliases `none`, `client-to-library`) |
 | `BOOKARR_DOWNLOAD_POLL_MS` | `3000` | Background poll interval |
 | `BOOKARR_MOCK_DOWNLOAD_MS` | `1500` | Mock client completion delay |
 | `PROWLARR_URL` / `PROWLARR_API_KEY` | _(empty)_ | Indexer manager |

@@ -123,6 +123,8 @@ export interface PublicSettings {
   logLevel: "debug" | "info" | "warn" | "error";
   downloadRetryMaxAttempts: number;
   downloadRetryBaseDelayMs: number;
+  /** libraryDirect = client saves into library; Bookarr marks available (no copy/move) */
+  importMode: "libraryDirect";
   precedence?: string;
   note?: string;
 }

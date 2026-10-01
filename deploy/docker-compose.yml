@@ -37,11 +37,14 @@ services:
       HARDCOVER_API_KEY: ${HARDCOVER_API_KEY:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
-      # SQLite DB lives under /data; library imports under /data/audiobooks
+      # SQLite DB lives under /data; library under /data/audiobooks.
+      # Library-direct: point qBittorrent/SABnzbd category save path at this same
+      # host path (or share the named volume). Bookarr does not copy/move files.
       # Entrypoint chowns /data for PUID/PGID on start (does not wipe existing DB).
       - bookarr-data:/data
       # Optional: bind-mount a host library path instead of the named volume subpath.
       # Ensure the host path is owned by PUID:PGID (or let entrypoint chown the mount root).
+      # Mount the same path into qBit/SAB as their download/category destination.
       # - /path/on/host/audiobooks:/data/audiobooks
     restart: unless-stopped
     healthcheck:
