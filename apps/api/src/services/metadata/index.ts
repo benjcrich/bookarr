@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { AppSettings, MetadataResult } from "../../domain/types.js";
+import { log } from "../../log.js";
 import { HardcoverProvider } from "./hardcover.js";
 import { MockMetadataProvider } from "./mock.js";
 import { OpenLibraryProvider } from "./openlibrary.js";
@@ -71,6 +72,11 @@ export class MetadataService {
     try {
       pushAll(await this.openLibrary.search(q, limit), "openlibrary");
     } catch (err) {
+      log.warn("metadata.lookup.failed", {
+        provider: "openlibrary",
+        query: q,
+        error: (err as Error).message,
+      });
       providers.push(`openlibrary:error:${(err as Error).message}`);
     }
 
@@ -78,16 +84,27 @@ export class MetadataService {
       try {
         pushAll(await this.hardcover.search(q, limit), "hardcover");
       } catch (err) {
+        log.warn("metadata.lookup.failed", {
+          provider: "hardcover",
+          query: q,
+          error: (err as Error).message,
+        });
         providers.push(`hardcover:error:${(err as Error).message}`);
       }
     }
 
     if (merged.length === 0) {
       pushAll(await this.mock.search(q, limit), "mock-fallback");
+      log.info("metadata.lookup.fallback", { query: q, provider: "mock" });
     }
 
     const results = merged.slice(0, limit);
     this.writeCache(cacheKey, results, settings.metadataCacheTtlHours);
+    log.debug("metadata.search", {
+      query: q,
+      results: results.length,
+      providers: providers.join(","),
+    });
     return { results, cached: false, providers };
   }
 

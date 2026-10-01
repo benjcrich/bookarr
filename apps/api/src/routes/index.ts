@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { parseIdList } from "../domain/types.js";
 import type { DownloadClientRegistry } from "../services/download-clients/index.js";
 import type { LibraryService } from "../services/library.js";
 import type { MetadataService } from "../services/metadata/index.js";
@@ -148,7 +149,7 @@ export async function registerRoutes(
   app.get<{ Querystring: { q?: string } }>("/api/search", async (req) => {
     const q = (req.query.q ?? "").trim();
     if (!q) return [];
-    return prowlarr.search(q);
+    return library.searchReleases(q);
   });
 
   app.get<{ Querystring: { q?: string; limit?: string } }>("/api/metadata/search", async (req) => {
@@ -206,6 +207,8 @@ export async function registerRoutes(
       .object({
         prowlarrUrl: z.string().optional(),
         prowlarrApiKey: z.string().optional(),
+        prowlarrIndexerIds: z.union([z.array(z.number().int().positive()), z.string()]).optional(),
+        prowlarrCategories: z.union([z.array(z.number().int().positive()), z.string()]).optional(),
         libraryRoot: z.string().optional(),
         qualityProfileId: z.number().int().optional(),
         autoSearchOnApprove: z.boolean().optional(),
@@ -222,12 +225,19 @@ export async function registerRoutes(
         metadataCacheTtlHours: z.number().int().positive().optional(),
         downloadPollMs: z.number().int().positive().optional(),
         mockDownloadMs: z.number().int().positive().optional(),
+        logLevel: z.enum(["debug", "info", "warn", "error"]).optional(),
         clearSecrets: z.array(z.enum(secretKeys)).optional(),
       })
       .parse(req.body);
 
-    const { clearSecrets, ...rest } = body;
+    const { clearSecrets, prowlarrIndexerIds, prowlarrCategories, ...rest } = body;
     const patch = { ...rest } as Record<string, unknown>;
+    if (prowlarrIndexerIds !== undefined) {
+      patch.prowlarrIndexerIds = parseIdList(prowlarrIndexerIds);
+    }
+    if (prowlarrCategories !== undefined) {
+      patch.prowlarrCategories = parseIdList(prowlarrCategories);
+    }
     for (const secret of secretKeys) {
       if (patch[secret] === "••••••••") delete patch[secret];
       // Empty string without clearSecrets means "keep existing"

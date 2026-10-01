@@ -103,7 +103,36 @@ Secrets in `GET /api/settings` are masked (`••••••••` + `*Set` f
 
 ### Editable in Admin → Settings (persisted)
 
-Prowlarr URL/API key · download client mode · qBittorrent · SABnzbd · library root · quality profile id · auto-search on approve · metadata mode · Hardcover key · metadata cache TTL · download poll ms · mock download ms.
+Prowlarr URL/API key · **Prowlarr search indexer IDs** · **Prowlarr categories** · download client mode · qBittorrent · SABnzbd · library root · quality profile id · auto-search on approve · metadata mode · Hardcover key · metadata cache TTL · download poll ms · mock download ms · log level.
+
+## Audiobook-only Prowlarr search
+
+Admin → Settings → **Prowlarr** supports either-or-both filters (persisted; applied to every `/api/search` and auto-search-on-approve):
+
+1. **Indexer IDs** — checkbox list from Prowlarr + optional manual IDs. Empty = search all indexers. Sent as repeated `indexerIds` query params.
+2. **Categories** — presets (3030 Books/Audiobook, 3000 Books, 7020 Audio/Audiobook) + comma-separated extras. Empty = no category filter. Sent as `categories`.
+
+**Typical audiobook setup:** tick your audiobook trackers and/or enable category **3030**. Use both if you want a belt-and-suspenders filter.
+
+## Logging
+
+Default logs are quiet (no per-request access spam). Application lines look like:
+
+```text
+INFO  bookarr.started host=0.0.0.0 port=8787 logLevel=info
+INFO  bookarr.config prowlarrUrl=http://prowlarr:9696 prowlarrIndexerIds=[1] prowlarrCategories=[3030] ...
+INFO  prowlarr.search mode=live query=Mistborn indexerIds=[1] categories=[3030] results=12
+INFO  download.enqueue jobId=3 title=... client=mock
+INFO  download.import jobId=3 ok=true stub=true importPath=...
+```
+
+| Level | Behavior |
+|-------|----------|
+| `info` (default) | App events only; HTTP errors (≥400 on `/api`) |
+| `debug` | Also every HTTP request + poll ticks |
+| `warn` / `error` | Quieter |
+
+Set via `LOG_LEVEL` env (bootstrap) or Admin → Settings → **Log level** (hot-reloads).
 
 ### Env-only / compose-level (must stay outside the UI)
 
@@ -146,6 +175,9 @@ On completion Bookarr runs an import hook under the configured library root as `
 | `BOOKARR_DOWNLOAD_POLL_MS` | `3000` | Background poll interval |
 | `BOOKARR_MOCK_DOWNLOAD_MS` | `1500` | Mock client completion delay |
 | `PROWLARR_URL` / `PROWLARR_API_KEY` | _(empty)_ | Indexer manager |
+| `PROWLARR_INDEXER_IDS` | _(empty)_ | Comma-separated indexer IDs (empty = all) |
+| `PROWLARR_CATEGORIES` | _(empty)_ | Comma-separated Newznab cats (e.g. `3030`) |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
 | `DOWNLOAD_CLIENT_MODE` | `mock` | `mock` or `auto` |
 | `QBITTORRENT_*` | _(empty)_ | URL, user, password, category |
 | `SABNZBD_*` | _(empty)_ | URL, API key, category |

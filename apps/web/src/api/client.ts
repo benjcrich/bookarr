@@ -100,6 +100,8 @@ export interface DownloadClientsHealth {
 export interface PublicSettings {
   prowlarrUrl: string;
   prowlarrApiKeySet: boolean;
+  prowlarrIndexerIds: number[];
+  prowlarrCategories: number[];
   libraryRoot: string;
   qualityProfileId: number;
   autoSearchOnApprove: boolean;
@@ -116,6 +118,7 @@ export interface PublicSettings {
   metadataCacheTtlHours: number;
   downloadPollMs: number;
   mockDownloadMs: number;
+  logLevel: "debug" | "info" | "warn" | "error";
   precedence?: string;
   note?: string;
 }

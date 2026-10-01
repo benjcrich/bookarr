@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { openDatabase } from "../db/database.js";
+import { defaultSettings } from "../domain/defaults.js";
 import { DownloadClientRegistry } from "../services/download-clients/index.js";
 import { importCompletedDownload } from "../services/importer.js";
 import { LibraryService } from "../services/library.js";
@@ -20,26 +21,14 @@ describe("download pipeline (mock clients)", () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bookarr-test-"));
     const db = openDatabase(path.join(tmp, "test.db"));
     const prowlarr = new ProwlarrClient("", "");
-    clients = new DownloadClientRegistry({
-      prowlarrUrl: "",
-      prowlarrApiKey: "",
-      libraryRoot: path.join(tmp, "library"),
-      qualityProfileId: 1,
-      autoSearchOnApprove: false,
-      downloadClientMode: "mock",
-      qbittorrentUrl: "",
-      qbittorrentUsername: "admin",
-      qbittorrentPassword: "",
-      qbittorrentCategory: "bookarr",
-      sabnzbdUrl: "",
-      sabnzbdApiKey: "",
-      sabnzbdCategory: "bookarr",
-      metadataMode: "mock",
-      hardcoverApiKey: "",
-      metadataCacheTtlHours: 24,
-      downloadPollMs: 3000,
-      mockDownloadMs: 50,
-    });
+    clients = new DownloadClientRegistry(
+      defaultSettings({
+        libraryRoot: path.join(tmp, "library"),
+        autoSearchOnApprove: false,
+        metadataMode: "mock",
+        mockDownloadMs: 50,
+      })
+    );
     library = new LibraryService(db, prowlarr, clients);
     library.updateSettings({
       libraryRoot: path.join(tmp, "library"),

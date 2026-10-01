@@ -11,16 +11,44 @@ type SettingsForm = Partial<PublicSettings> & {
   qbittorrentPassword?: string;
   sabnzbdApiKey?: string;
   hardcoverApiKey?: string;
+  /** Comma-separated extras not in the checkbox list */
+  manualIndexerIds?: string;
+  manualCategories?: string;
 };
 
-function blankSecrets(s: PublicSettings): SettingsForm {
+const CATEGORY_PRESETS: Array<{ id: number; label: string }> = [
+  { id: 3030, label: "Books/Audiobook (3030)" },
+  { id: 3000, label: "Books (3000)" },
+  { id: 7020, label: "Audio/Audiobook (7020)" },
+];
+
+function blankSecrets(
+  s: PublicSettings,
+  knownIndexerIds: Set<number> = new Set()
+): SettingsForm {
+  const knownCats = new Set(CATEGORY_PRESETS.map((c) => c.id));
+  const manualCats = (s.prowlarrCategories ?? []).filter((id) => !knownCats.has(id));
+  const checkedIndexers = (s.prowlarrIndexerIds ?? []).filter((id) => knownIndexerIds.has(id));
+  const manualIndexers = (s.prowlarrIndexerIds ?? []).filter((id) => !knownIndexerIds.has(id));
   return {
     ...s,
+    prowlarrIndexerIds: checkedIndexers,
+    prowlarrCategories: (s.prowlarrCategories ?? []).filter((id) => knownCats.has(id)),
     prowlarrApiKey: "",
     qbittorrentPassword: "",
     sabnzbdApiKey: "",
     hardcoverApiKey: "",
+    manualIndexerIds: manualIndexers.join(", "),
+    manualCategories: manualCats.join(", "),
   };
+}
+
+function mergeIds(selected: number[], manual: string | undefined): number[] {
+  const fromManual = (manual ?? "")
+    .split(/[\s,;]+/)
+    .map((p) => Number(p))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  return [...new Set([...selected, ...fromManual])].sort((a, b) => a - b);
 }
 
 export function AdminSettings() {
@@ -38,8 +66,8 @@ export function AdminSettings() {
   useEffect(() => {
     Promise.all([bookarrApi.settings(), bookarrApi.indexers(), bookarrApi.downloadClients()])
       .then(([s, idx, dc]) => {
-        setForm(blankSecrets(s));
         setIndexers(idx);
+        setForm(blankSecrets(s, new Set(idx.map((i) => i.id))));
         setClientsLabel(
           `torrent=${dc.torrent.kind} · usenet=${dc.usenet.kind} · mode=${dc.mode}`
         );
@@ -49,6 +77,24 @@ export function AdminSettings() {
 
   function set<K extends string>(key: K, value: unknown) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  function toggleIndexer(id: number, checked: boolean) {
+    setForm((f) => {
+      const current = new Set(f.prowlarrIndexerIds ?? []);
+      if (checked) current.add(id);
+      else current.delete(id);
+      return { ...f, prowlarrIndexerIds: [...current].sort((a, b) => a - b) };
+    });
+  }
+
+  function toggleCategory(id: number, checked: boolean) {
+    setForm((f) => {
+      const current = new Set(f.prowlarrCategories ?? []);
+      if (checked) current.add(id);
+      else current.delete(id);
+      return { ...f, prowlarrCategories: [...current].sort((a, b) => a - b) };
+    });
   }
 
   async function refreshClients() {
@@ -62,8 +108,13 @@ export function AdminSettings() {
     setMessage(null);
     setSaving(true);
     try {
+      const prowlarrIndexerIds = mergeIds(form.prowlarrIndexerIds ?? [], form.manualIndexerIds);
+      const prowlarrCategories = mergeIds(form.prowlarrCategories ?? [], form.manualCategories);
+
       const body: Record<string, unknown> = {
         prowlarrUrl: form.prowlarrUrl,
+        prowlarrIndexerIds,
+        prowlarrCategories,
         libraryRoot: form.libraryRoot,
         qualityProfileId: form.qualityProfileId,
         autoSearchOnApprove: form.autoSearchOnApprove,
@@ -77,15 +128,20 @@ export function AdminSettings() {
         metadataCacheTtlHours: form.metadataCacheTtlHours,
         downloadPollMs: form.downloadPollMs,
         mockDownloadMs: form.mockDownloadMs,
+        logLevel: form.logLevel,
       };
       if (form.prowlarrApiKey?.trim()) body.prowlarrApiKey = form.prowlarrApiKey.trim();
       if (form.qbittorrentPassword?.trim()) body.qbittorrentPassword = form.qbittorrentPassword.trim();
       if (form.sabnzbdApiKey?.trim()) body.sabnzbdApiKey = form.sabnzbdApiKey.trim();
       if (form.hardcoverApiKey?.trim()) body.hardcoverApiKey = form.hardcoverApiKey.trim();
       const s = await bookarrApi.updateSettings(body);
-      setForm(blankSecrets(s));
+      setForm(blankSecrets(s, new Set(indexers.map((i) => i.id))));
       await refreshClients();
-      setMessage("Settings saved. Changes apply immediately (no restart).");
+      const filterNote =
+        prowlarrIndexerIds.length || prowlarrCategories.length
+          ? ` Search filters: indexers=${prowlarrIndexerIds.join(",") || "all"} categories=${prowlarrCategories.join(",") || "none"}.`
+          : " Search: all indexers, no category filter.";
+      setMessage(`Settings saved. Changes apply immediately (no restart).${filterNote}`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -98,7 +154,7 @@ export function AdminSettings() {
     setMessage(null);
     try {
       const s = await bookarrApi.updateSettings({ clearSecrets: [key] });
-      setForm(blankSecrets(s));
+      setForm(blankSecrets(s, new Set(indexers.map((i) => i.id))));
       await refreshClients();
       setMessage(`${label} cleared.`);
     } catch (err) {
@@ -121,12 +177,15 @@ export function AdminSettings() {
     }
   }
 
+  const selectedIndexers = new Set(form.prowlarrIndexerIds ?? []);
+  const selectedCategories = new Set(form.prowlarrCategories ?? []);
+
   return (
     <>
       <h1 className="page-title">Settings</h1>
       <p className="page-lead">
-        Runtime config is saved in SQLite and wins over env after first boot. Env only bootstraps
-        missing keys (compose secrets, first deploy). Ports and data paths stay compose-level.
+        Runtime config is saved in SQLite and wins over env after first boot. Limit Prowlarr search
+        to audiobook indexers and/or Newznab categories (either or both).
       </p>
       {clientsLabel && <p className="flash">Clients: {clientsLabel}</p>}
       {form.note && <p className="flash">{form.note}</p>}
@@ -170,6 +229,72 @@ export function AdminSettings() {
               </div>
             </div>
           )}
+
+          <div className="form-grid" style={{ paddingTop: 0 }}>
+            <div>
+              <div className="meta" style={{ marginBottom: "0.5rem" }}>
+                Search indexers — empty selection = all indexers. Checked IDs are sent as{" "}
+                <code>indexerIds</code>.
+              </div>
+              {indexers.length === 0 ? (
+                <div className="empty">No indexers returned from Prowlarr.</div>
+              ) : (
+                <div className="check-list">
+                  {indexers.map((i) => (
+                    <label key={i.id} className="check-row">
+                      <input
+                        type="checkbox"
+                        checked={selectedIndexers.has(i.id)}
+                        onChange={(e) => toggleIndexer(i.id, e.target.checked)}
+                      />
+                      <span>
+                        {i.name}{" "}
+                        <span className="meta">
+                          id {i.id} · {i.protocol}
+                          {!i.enable ? " · disabled" : ""}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <label style={{ marginTop: "0.75rem" }}>
+                Extra indexer IDs (comma-separated)
+                <input
+                  value={form.manualIndexerIds ?? ""}
+                  onChange={(e) => set("manualIndexerIds", e.target.value)}
+                  placeholder="e.g. 12, 15"
+                />
+              </label>
+            </div>
+
+            <div>
+              <div className="meta" style={{ marginBottom: "0.5rem" }}>
+                Categories — empty = no category filter. Sent as <code>categories</code> (e.g. 3030
+                = Books/Audiobook).
+              </div>
+              <div className="check-list">
+                {CATEGORY_PRESETS.map((c) => (
+                  <label key={c.id} className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={selectedCategories.has(c.id)}
+                      onChange={(e) => toggleCategory(c.id, e.target.checked)}
+                    />
+                    <span>{c.label}</span>
+                  </label>
+                ))}
+              </div>
+              <label style={{ marginTop: "0.75rem" }}>
+                Extra category IDs (comma-separated)
+                <input
+                  value={form.manualCategories ?? ""}
+                  onChange={(e) => set("manualCategories", e.target.value)}
+                  placeholder="e.g. 3030, 7020"
+                />
+              </label>
+            </div>
+          </div>
         </div>
 
         <div className="panel" style={{ marginBottom: "1rem" }}>
@@ -377,6 +502,18 @@ export function AdminSettings() {
                 onChange={(e) => set("mockDownloadMs", Number(e.target.value))}
               />
             </label>
+            <label>
+              Log level
+              <select
+                value={form.logLevel ?? "info"}
+                onChange={(e) => set("logLevel", e.target.value)}
+              >
+                <option value="info">info (default — quiet HTTP)</option>
+                <option value="debug">debug (verbose HTTP + poll)</option>
+                <option value="warn">warn</option>
+                <option value="error">error</option>
+              </select>
+            </label>
           </div>
           <div className="form-grid" style={{ paddingTop: 0 }}>
             <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
@@ -444,31 +581,6 @@ export function AdminSettings() {
           </div>
         </div>
       )}
-
-      <div className="panel">
-        <div className="panel-head">
-          <h2>Indexers (via Prowlarr)</h2>
-        </div>
-        {indexers.length === 0 ? (
-          <div className="empty">No indexers returned.</div>
-        ) : (
-          indexers.map((i) => (
-            <div className="row" key={i.id}>
-              <div>
-                <h3>{i.name}</h3>
-                <div className="meta">id {i.id}</div>
-              </div>
-              <div>
-                <span className="badge">{i.protocol}</span>{" "}
-                <span className={`badge ${i.enable ? "available" : "denied"}`}>
-                  {i.enable ? "enabled" : "disabled"}
-                </span>
-              </div>
-              <div />
-            </div>
-          ))
-        )}
-      </div>
     </>
   );
 }
