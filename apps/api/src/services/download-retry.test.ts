@@ -15,6 +15,7 @@ describe("download job retries", () => {
 
   before(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bookarr-retry-"));
+    fs.mkdirSync(path.join(tmp, "library"), { recursive: true });
     const db = openDatabase(path.join(tmp, "retry.db"));
     const clients = new DownloadClientRegistry(
       defaultSettings({
@@ -22,6 +23,7 @@ describe("download job retries", () => {
         mockDownloadMs: 50,
         downloadRetryMaxAttempts: 3,
         downloadRetryBaseDelayMs: 50,
+        importMode: "libraryDirect",
       })
     );
     library = new LibraryService(db, new ProwlarrClient("", ""), clients);
@@ -31,6 +33,7 @@ describe("download job retries", () => {
       mockDownloadMs: 50,
       downloadRetryMaxAttempts: 3,
       downloadRetryBaseDelayMs: 50,
+      importMode: "libraryDirect",
     });
   });
 
@@ -38,7 +41,7 @@ describe("download job retries", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("treats EACCES as retryable when output path exists", () => {
+  it("treats library-direct path-not-visible as retryable when output path set", () => {
     const job = {
       id: 1,
       audiobookId: null,
@@ -50,11 +53,12 @@ describe("download job retries", () => {
       status: "failed" as const,
       protocol: "torrent",
       size: 1,
-      error: "EACCES: permission denied, mkdir '/data/audiobooks/Unknown Author'",
+      error:
+        'Library-direct import failed: client path not visible to Bookarr: "/data/audiobooks/book"',
       client: "mock" as const,
       externalId: null,
       progress: 100,
-      outputPath: "/downloads/mock/x",
+      outputPath: "/data/audiobooks/book",
       importPath: null,
       attempts: 1,
       nextRetryAt: null,
@@ -64,11 +68,11 @@ describe("download job retries", () => {
     assert.equal(isRetryableDownloadError(job.error, job), true);
   });
 
-  it("schedules auto-retry after import EACCES and succeeds on manual retry", async () => {
+  it("schedules auto-retry after library-direct miss and succeeds when audio appears", async () => {
     const job = await library.enqueueGrab({
       release: {
-        guid: "retry-eacces-1",
-        title: "Retry Permission Book",
+        guid: "retry-direct-1",
+        title: "Retry Direct Book",
         indexerId: 1,
         indexer: "Mock",
         protocol: "torrent",
@@ -77,26 +81,24 @@ describe("download job retries", () => {
       },
     });
 
-    // Force an import failure by pointing library root at a non-writable path simulation:
-    // mark failed as import EACCES with output path set (as completeAndImport would).
-    library.updateSettings({ libraryRoot: path.join(tmp, "library") });
+    const clientPath = path.join(tmp, "library", "pending-book");
     const failed = library.markJobFailed(
       job.id,
-      "Could not create library path: EACCES: permission denied, mkdir '/data/audiobooks/Unknown Author'",
-      { progress: 100, outputPath: path.join(tmp, "src-out") }
+      `Library-direct import failed: no audio files under "${clientPath}" yet.`,
+      { progress: 100, outputPath: clientPath }
     );
     assert.equal(failed.status, "failed");
     assert.ok(failed.nextRetryAt, "expected next_retry_at");
     assert.equal(failed.attempts, 1);
 
-    // Create writable library and import-source stub dir, then manual retry (import-only path)
-    fs.mkdirSync(path.join(tmp, "library"), { recursive: true });
-    fs.mkdirSync(path.join(tmp, "src-out"), { recursive: true });
+    fs.mkdirSync(clientPath, { recursive: true });
+    fs.writeFileSync(path.join(clientPath, "chapter.m4b"), Buffer.from("audio"));
+
     const retried = await library.retryDownload(job.id, { manual: true });
     assert.ok(retried);
     assert.equal(retried!.attempts, 2);
-    // Stub import should succeed (ok with stub) once mkdir works
     assert.equal(retried!.status, "imported");
+    assert.equal(retried!.importPath, clientPath);
   });
 
   it("poll picks up due auto-retries", async () => {
@@ -112,19 +114,12 @@ describe("download job retries", () => {
       },
     });
     library.markJobFailed(job.id, "ECONNREFUSED client down");
-    // Make retry due immediately
-    const dbPath = path.join(tmp, "retry.db");
-    // Access via update next_retry_at in the past through mark + direct SQL via retry poll
-    // Re-open isn't needed — use retryDownload after forcing due via a second mark with past time:
-    // Directly set next_retry_at through a tiny wait + poll after updating settings delay to 1ms
     library.updateSettings({ downloadRetryBaseDelayMs: 1, downloadRetryMaxAttempts: 5 });
     library.markJobFailed(job.id, "ECONNREFUSED client down");
     await new Promise((r) => setTimeout(r, 20));
     await library.pollDownloads();
     const after = library.getDownload(job.id)!;
-    // Should have left failed-with-schedule or re-enqueued; attempts should be >= 1
     assert.ok(after.attempts >= 1);
     assert.ok(["queued", "downloading", "failed", "imported", "completed"].includes(after.status));
-    void dbPath;
   });
 });

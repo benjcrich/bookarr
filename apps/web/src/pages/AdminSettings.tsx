@@ -116,6 +116,7 @@ export function AdminSettings() {
         prowlarrIndexerIds,
         prowlarrCategories,
         libraryRoot: form.libraryRoot,
+        importMode: form.importMode ?? "libraryDirect",
         qualityProfileId: form.qualityProfileId,
         autoSearchOnApprove: form.autoSearchOnApprove,
         downloadClientMode: form.downloadClientMode,
@@ -313,6 +314,17 @@ export function AdminSettings() {
               />
             </label>
             <label>
+              Import / completion mode
+              <select
+                value={form.importMode ?? "libraryDirect"}
+                onChange={(e) => set("importMode", e.target.value)}
+              >
+                <option value="libraryDirect">
+                  Library-direct (client saves into library; no copy/move)
+                </option>
+              </select>
+            </label>
+            <label>
               Default quality profile ID
               <input
                 type="number"
@@ -330,6 +342,12 @@ export function AdminSettings() {
               Auto-search & grab on request approve
             </label>
           </div>
+          <p style={{ margin: "0.75rem 0 0", fontSize: "0.9rem", color: "var(--muted, #6b7280)" }}>
+            Library-direct: point qBittorrent / SABnzbd category or save path at the same mount as Library
+            root (e.g. <code>/data/audiobooks</code>). When the client reports complete, Bookarr verifies
+            audio files and marks the book available — it does not copy, move, or create empty Author/Title
+            stubs.
+          </p>
         </div>
 
         <div className="panel" style={{ marginBottom: "1rem" }}>
